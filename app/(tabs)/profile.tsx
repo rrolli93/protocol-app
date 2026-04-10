@@ -14,6 +14,7 @@ import { useRouter } from 'expo-router';
 import { useAuth } from '../../hooks/useAuth';
 import { useChallenges, getPillarEmoji } from '../../hooks/useChallenge';
 import { Challenge } from '../../lib/supabase';
+import { useStravaConnect } from '../../hooks/useStrava';
 
 // ─── Design Tokens ────────────────────────────────────────────────────────────
 const C = {
@@ -46,9 +47,15 @@ const IntegrationRow: React.FC<{
   label: string;
   sublabel: string;
   connected?: boolean;
+  loading?: boolean;
   onPress: () => void;
-}> = ({ icon, label, sublabel, connected, onPress }) => (
-  <TouchableOpacity style={styles.integrationRow} onPress={onPress} activeOpacity={0.75}>
+}> = ({ icon, label, sublabel, connected, loading, onPress }) => (
+  <TouchableOpacity
+    style={styles.integrationRow}
+    onPress={onPress}
+    activeOpacity={0.75}
+    disabled={loading}
+  >
     <View style={styles.integrationIconWrap}>
       <Text style={styles.integrationIcon}>{icon}</Text>
     </View>
@@ -69,14 +76,18 @@ const IntegrationRow: React.FC<{
         connected ? styles.integrationBadgeConnected : styles.integrationBadgeIdle,
       ]}
     >
-      <Text
-        style={[
-          styles.integrationBadgeText,
-          connected && { color: C.success },
-        ]}
-      >
-        {connected ? 'Connected' : 'Connect'}
-      </Text>
+      {loading ? (
+        <ActivityIndicator size="small" color={C.primary} />
+      ) : (
+        <Text
+          style={[
+            styles.integrationBadgeText,
+            connected && { color: C.success },
+          ]}
+        >
+          {connected ? 'Connected ✓' : 'Connect'}
+        </Text>
+      )}
     </View>
   </TouchableOpacity>
 );
@@ -116,6 +127,14 @@ export default function ProfileScreen() {
 
   const { challenges: activeChallenges, loading: challengesLoading } = useChallenges(user?.id);
 
+  // Strava OAuth hook
+  const {
+    connect: connectStrava,
+    loading: stravaConnecting,
+    error: stravaError,
+    connected: stravaHookConnected,
+  } = useStravaConnect(user?.id);
+
   const username =
     profile?.username ?? user?.email?.split('@')[0] ?? 'athlete';
   const displayName = profile?.handle
@@ -128,8 +147,16 @@ export default function ProfileScreen() {
   const totalEarned = profile?.total_earned_usdc ?? 0;
   const streak = profile?.current_streak ?? 0;
 
-  const stravaConnected = profile?.strava_connected ?? false;
+  // stravaConnected is true if either the profile says so or the hook just connected
+  const stravaConnected = (profile?.strava_connected ?? false) || stravaHookConnected;
   const appleConnected = profile?.apple_health_connected ?? false;
+
+  // Show Strava error as an alert (non-blocking)
+  React.useEffect(() => {
+    if (stravaError) {
+      Alert.alert('Strava Connect Error', stravaError);
+    }
+  }, [stravaError]);
 
   const handleSignOut = useCallback(() => {
     Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
@@ -224,9 +251,10 @@ export default function ProfileScreen() {
             <IntegrationRow
               icon="🏃"
               label="Strava"
-              sublabel={stravaConnected ? 'Connected' : 'Track runs & rides'}
+              sublabel={stravaConnected ? 'Syncing activities' : 'Track runs & rides'}
               connected={stravaConnected}
-              onPress={() => handleIntegrationPress('Strava')}
+              loading={stravaConnecting}
+              onPress={stravaConnected ? () => {} : connectStrava}
             />
             <View style={styles.rowDivider} />
             <IntegrationRow

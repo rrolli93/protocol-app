@@ -16,6 +16,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../hooks/useAuth';
 import { useCreateChallenge } from '../../hooks/useChallenge';
+import { useWallet } from '../../hooks/useWallet';
+import { useCreateChallengeOnChain, useWalletBalance } from '../../hooks/useContract';
+import { WalletConnect } from '../../components/WalletConnect';
+import { supabase } from '../../lib/supabase';
+import { BASE_CHAIN_ID } from '../../lib/contracts';
 
 // ─── Design Tokens ────────────────────────────────────────────────────────────
 const C = {
@@ -100,6 +105,13 @@ export default function CreateScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const createChallenge = useCreateChallenge();
+  const { isConnected, chainId, switchToBase, formatAddress, walletAddress } = useWallet();
+  const { balance: usdcBalance, formatted: usdcFormatted } = useWalletBalance();
+  const onChain = useCreateChallengeOnChain();
+
+  // Deploy state machine: idle | pending | success | error
+  const [deployState, setDeployState] = useState<'idle' | 'pending' | 'success' | 'error'>('idle');
+  const [deployError, setDeployError] = useState<string | null>(null);
 
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [selectedPillar, setSelectedPillar] = useState<PillarOption | null>(null);
@@ -147,7 +159,27 @@ export default function CreateScreen() {
   const handleDeploy = useCallback(async () => {
     if (!user?.id || !selectedPillar) return;
 
+    // Guard: wallet must be connected for staked challenges
+    if (effectiveStake > 0 && !isConnected) {
+      Alert.alert('Wallet Required', 'Connect your wallet to stake USDC.');
+      return;
+    }
+
+    // Guard: must be on Base
+    if (effectiveStake > 0 && chainId !== BASE_CHAIN_ID) {
+      try {
+        await switchToBase();
+      } catch {
+        Alert.alert('Wrong Network', 'Please switch to Base mainnet.');
+        return;
+      }
+    }
+
+    setDeployState('pending');
+    setDeployError(null);
+
     try {
+      // Step 1: Create challenge record in Supabase
       const result = await createChallenge.mutateAsync({
         creator_id: user.id,
         name: finalName,
@@ -157,11 +189,40 @@ export default function CreateScreen() {
         stake_usdc: effectiveStake,
         privacy,
       });
-      router.push(`/challenge/${result.id}`);
+
+      // Step 2: If there's a stake, write to Base
+      if (effectiveStake > 0) {
+        await onChain.write({
+          challengeId: result.id,
+          stakeAmountUsdc: effectiveStake,
+          durationDays: effectiveDuration,
+        });
+
+        // Step 3: Store tx hash in DB as contract_address reference
+        if (onChain.txHash) {
+          await supabase
+            .from('challenges')
+            .update({ contract_address: onChain.txHash })
+            .eq('id', result.id);
+        }
+      }
+
+      setDeployState('success');
+
+      // Navigate after brief success flash
+      setTimeout(() => {
+        router.push(`/challenge/${result.id}`);
+      }, 1500);
     } catch (err: any) {
-      Alert.alert('Deploy Failed', err?.message ?? 'Something went wrong. Try again.');
+      const msg = onChain.error ?? err?.message ?? 'Something went wrong. Try again.';
+      setDeployState('error');
+      setDeployError(msg);
+      Alert.alert('Deploy Failed', msg);
     }
-  }, [user?.id, selectedPillar, finalName, effectiveDuration, effectiveStake, privacy, createChallenge, router]);
+  }, [
+    user?.id, selectedPillar, finalName, effectiveDuration, effectiveStake,
+    privacy, createChallenge, onChain, router, isConnected, chainId, switchToBase,
+  ]);
 
   const pillarColor = selectedPillar?.color ?? C.primary;
 
@@ -449,6 +510,37 @@ export default function CreateScreen() {
               <Text style={styles.stepTitle}>Review & Deploy</Text>
               <Text style={styles.stepSubtitle}>Confirm your challenge details</Text>
 
+              {/* Wallet section — only show when stake > 0 */}
+              {effectiveStake > 0 && (
+                <View style={styles.walletSection}>
+                  {isConnected && walletAddress ? (
+                    <View style={styles.walletRow}>
+                      <View style={styles.walletInfo}>
+                        <View style={styles.walletDot} />
+                        <Text style={styles.walletAddr}>{formatAddress(walletAddress)}</Text>
+                      </View>
+                      <View style={styles.usdcPill}>
+                        <Text style={styles.usdcPillText}>
+                          ${parseFloat(usdcFormatted).toFixed(2)} USDC
+                        </Text>
+                      </View>
+                    </View>
+                  ) : (
+                    <WalletConnect
+                      title="Connect to stake USDC"
+                      subtitle={`You need ${effectiveStake} USDC to deploy this challenge.`}
+                    />
+                  )}
+                  {isConnected && parseFloat(usdcFormatted) < effectiveStake && (
+                    <View style={styles.insufficientBanner}>
+                      <Text style={styles.insufficientText}>
+                        ⚠️ Insufficient USDC balance. You need ${effectiveStake} USDC.
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
+
               <View style={[styles.confirmCard, { borderColor: `${pillarColor}40` }]}>
                 {/* Pillar hero */}
                 <View style={[styles.confirmHero, { backgroundColor: `${pillarColor}15` }]}>
@@ -496,21 +588,36 @@ export default function CreateScreen() {
               </View>
 
               <TouchableOpacity
-                style={[
-                  styles.deployBtn,
-                  { backgroundColor: pillarColor },
-                  createChallenge.isPending && styles.deployBtnLoading,
-                ]}
-                onPress={handleDeploy}
-                activeOpacity={0.85}
-                disabled={createChallenge.isPending}
-              >
-                {createChallenge.isPending ? (
-                  <ActivityIndicator color="#FFFFFF" />
-                ) : (
+              {/* Deploy button — changes with state */}
+              {deployState === 'success' ? (
+                <View style={[styles.deployBtn, styles.deployBtnSuccess]}>
+                  <Text style={styles.deployBtnText}>✅ Challenge live on Base!</Text>
+                </View>
+              ) : deployState === 'pending' ? (
+                <View style={[styles.deployBtn, { backgroundColor: pillarColor }, styles.deployBtnLoading]}>
+                  <ActivityIndicator color="#FFFFFF" style={{ marginRight: 8 }} />
+                  <Text style={styles.deployBtnText}>Deploying to Base...</Text>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={[
+                    styles.deployBtn,
+                    { backgroundColor: pillarColor },
+                    (createChallenge.isPending || onChain.isLoading) && styles.deployBtnLoading,
+                  ]}
+                  onPress={handleDeploy}
+                  activeOpacity={0.85}
+                  disabled={createChallenge.isPending || onChain.isLoading}
+                >
                   <Text style={styles.deployBtnText}>🚀 Deploy Challenge</Text>
-                )}
-              </TouchableOpacity>
+                </TouchableOpacity>
+              )}
+
+              {deployState === 'error' && deployError && (
+                <View style={styles.deployErrorBox}>
+                  <Text style={styles.deployErrorText}>{deployError}</Text>
+                </View>
+              )}
 
               <Text style={styles.deployNote}>
                 You'll be added as the first participant automatically.

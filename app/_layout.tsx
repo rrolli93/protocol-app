@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { View, ActivityIndicator } from 'react-native';
 import { Stack, Tabs, useRouter, useSegments } from 'expo-router';
 import { useFonts } from 'expo-font';
@@ -6,9 +6,11 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider } from 'wagmi';
+import * as Notifications from 'expo-notifications';
 import { wagmiConfig } from '../lib/wagmi';
 import { useAuth } from '../hooks/useAuth';
 import { theme } from '../constants/theme';
+import { requestPermissions, registerForPushNotifications } from '../lib/notifications';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -175,6 +177,10 @@ function CreateTabIcon({ active }: { active: boolean }) {
 }
 
 export default function RootLayout() {
+  const router = useRouter();
+  const notificationListener = useRef<Notifications.EventSubscription | null>(null);
+  const responseListener = useRef<Notifications.EventSubscription | null>(null);
+
   const [fontsLoaded] = useFonts({
     Inter: require('../assets/fonts/Inter-Regular.ttf'),
     'Inter-Medium': require('../assets/fonts/Inter-Medium.ttf'),
@@ -183,6 +189,47 @@ export default function RootLayout() {
     JetBrainsMono: require('../assets/fonts/JetBrainsMono-Regular.ttf'),
     'JetBrainsMono-Bold': require('../assets/fonts/JetBrainsMono-Bold.ttf'),
   });
+
+  // ── Push notifications setup ─────────────────────────────────────────────
+  useEffect(() => {
+    // Request permissions and register token on app start
+    (async () => {
+      try {
+        const status = await requestPermissions();
+        if (status === 'granted') {
+          await registerForPushNotifications();
+        }
+      } catch (err) {
+        console.warn('[RootLayout] Notification setup error:', err);
+      }
+    })();
+
+    // Foreground notification listener (optional — handler in lib/notifications.ts takes care of display)
+    notificationListener.current = Notifications.addNotificationReceivedListener(
+      (notification) => {
+        console.log('[RootLayout] Notification received:', notification.request.content.title);
+      },
+    );
+
+    // Response listener: user tapped a notification
+    responseListener.current = Notifications.addNotificationResponseReceivedListener(
+      (response) => {
+        const data = response.notification.request.content.data as Record<string, unknown>;
+        // Navigate to the relevant challenge screen if a challengeId is provided
+        if (data?.challengeId && typeof data.challengeId === 'string') {
+          router.push(`/challenge/${data.challengeId}` as any);
+        } else {
+          // Default: go to home tab
+          router.push('/(tabs)/' as any);
+        }
+      },
+    );
+
+    return () => {
+      notificationListener.current?.remove();
+      responseListener.current?.remove();
+    };
+  }, [router]);
 
   if (!fontsLoaded) {
     return (

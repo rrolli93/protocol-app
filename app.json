@@ -11,8 +11,9 @@
       "backgroundColor": "#0A0A0F"
     },
     "ios": {
-      "bundleIdentifier": "com.rrolli93.protocol",
+      "bundleIdentifier": "com.rrolli.protocol",
       "deploymentTarget": "16.0",
+      "supportsTablet": false,
       "infoPlist": {
         "NSHealthShareUsageDescription": "Protocol reads your health data to track challenge progress.",
         "NSHealthUpdateUsageDescription": "Protocol writes workout data to Apple Health."
