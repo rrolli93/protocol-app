@@ -981,9 +981,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: 52,
+    flexDirection: 'row',
   },
   deployBtnLoading: {
     opacity: 0.7,
+  },
+  deployBtnSuccess: {
+    backgroundColor: 'rgba(0,255,135,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(0,255,135,0.4)',
   },
   deployBtnText: {
     fontSize: 16,
@@ -993,6 +999,76 @@ const styles = StyleSheet.create({
   deployNote: {
     fontSize: 12,
     color: C.textSecondary,
+    textAlign: 'center',
+  },
+  deployErrorBox: {
+    backgroundColor: 'rgba(255,71,87,0.1)',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,71,87,0.3)',
+  },
+  deployErrorText: {
+    color: '#FF4757',
+    fontSize: 12,
+    textAlign: 'center',
+  },
+  // Wallet section in step 4
+  walletSection: {
+    gap: 8,
+  },
+  walletRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: C.card,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: C.border,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  walletInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  walletDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#00FF87',
+  },
+  walletAddr: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: C.textPrimary,
+  },
+  usdcPill: {
+    backgroundColor: C.successMuted,
+    borderRadius: 9999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(0,255,135,0.3)',
+  },
+  usdcPillText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: C.success,
+  },
+  insufficientBanner: {
+    backgroundColor: 'rgba(255,71,87,0.1)',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,71,87,0.3)',
+  },
+  insufficientText: {
+    fontSize: 12,
+    color: '#FF4757',
     textAlign: 'center',
   },
   // Bottom bar

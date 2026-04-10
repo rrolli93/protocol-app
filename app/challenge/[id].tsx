@@ -14,6 +14,10 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useChallenge, useJoinChallenge, getPillarEmoji } from '../../hooks/useChallenge';
 import { useAuth } from '../../hooks/useAuth';
 import { LeaderboardEntry } from '../../lib/supabase';
+import { useWallet } from '../../hooks/useWallet';
+import { useJoinChallengeOnChain, useWalletBalance } from '../../hooks/useContract';
+import { WalletConnect } from '../../components/WalletConnect';
+import { BASE_CHAIN_ID } from '../../lib/contracts';
 
 // ─── Design Tokens ────────────────────────────────────────────────────────────
 const C = {
@@ -137,6 +141,17 @@ export default function ChallengeDetailScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const [joining, setJoining] = useState(false);
+  const [txConfirmed, setTxConfirmed] = useState(false);
+
+  // Wallet state
+  const {
+    isConnected,
+    walletAddress,
+    chainId,
+    switchToBase,
+    formatAddress,
+  } = useWallet();
+  const { balance: usdcBalance, formatted: usdcFormatted } = useWalletBalance();
 
   const {
     challenge,
@@ -148,6 +163,7 @@ export default function ChallengeDetailScreen() {
   } = useChallenge(id ?? '', user?.id);
 
   const joinMutation = useJoinChallenge();
+  const onChainJoin = useJoinChallengeOnChain(id ?? '');
 
   const pillarEmoji = challenge ? getPillarEmoji(challenge.pillar_id) : '🏆';
   const pillarColor = C.primary; // could derive from pillar_id if needed
@@ -162,13 +178,55 @@ export default function ChallengeDetailScreen() {
 
   const handleJoin = useCallback(async () => {
     if (!user?.id || !challenge) return;
+
+    // Guard: wallet required for staked challenges
+    if (challenge.stake_usdc > 0 && !isConnected) {
+      Alert.alert('Wallet Required', 'Connect your wallet to stake USDC and join.');
+      return;
+    }
+
+    // Guard: insufficient balance
+    if (
+      challenge.stake_usdc > 0 &&
+      parseFloat(usdcFormatted) < challenge.stake_usdc
+    ) {
+      Alert.alert(
+        'Insufficient USDC',
+        `You need $${challenge.stake_usdc} USDC but only have $${parseFloat(usdcFormatted).toFixed(2)}.`
+      );
+      return;
+    }
+
+    // Guard: wrong chain
+    if (challenge.stake_usdc > 0 && chainId !== BASE_CHAIN_ID) {
+      try {
+        await switchToBase();
+      } catch {
+        Alert.alert('Wrong Network', 'Please switch to Base mainnet.');
+        return;
+      }
+    }
+
     setJoining(true);
+    setTxConfirmed(false);
+
     try {
+      // Step 1: On-chain deposit (approve + deposit) if stake > 0
+      if (challenge.stake_usdc > 0) {
+        await onChainJoin.write({ stakeAmountUsdc: challenge.stake_usdc });
+        if (onChainJoin.error) {
+          throw new Error(onChainJoin.error);
+        }
+      }
+
+      // Step 2: Update Supabase record
       await joinMutation.mutateAsync({
         challenge_id: challenge.id,
         user_id: user.id,
         stake_usdc: challenge.stake_usdc,
       });
+
+      setTxConfirmed(true);
       Alert.alert('Joined! 🎉', `You've joined "${challenge.name}". Good luck!`);
       refresh();
     } catch (err: any) {
@@ -176,7 +234,10 @@ export default function ChallengeDetailScreen() {
     } finally {
       setJoining(false);
     }
-  }, [user?.id, challenge, joinMutation, refresh]);
+  }, [
+    user?.id, challenge, joinMutation, onChainJoin, refresh,
+    isConnected, usdcFormatted, chainId, switchToBase,
+  ]);
 
   // ── Loading ──────────────────────────────────────────────────────────────────
   if (loading) {
@@ -356,14 +417,63 @@ export default function ChallengeDetailScreen() {
         {/* ── Join CTA ─────────────────────────────────────────────────────── */}
         {!ended && !hasJoined && (
           <View style={styles.section}>
+
+            {/* Wallet connect prompt when stake > 0 and not connected */}
+            {challenge.stake_usdc > 0 && !isConnected && (
+              <WalletConnect
+                title="Connect to join"
+                subtitle={`Stake $${challenge.stake_usdc} USDC to enter this challenge.`}
+              />
+            )}
+
+            {/* USDC balance warning */}
+            {challenge.stake_usdc > 0 && isConnected && parseFloat(usdcFormatted) < challenge.stake_usdc && (
+              <View style={styles.balanceWarning}>
+                <Text style={styles.balanceWarningText}>
+                  ⚠️ Low balance: ${parseFloat(usdcFormatted).toFixed(2)} USDC  •  Need ${challenge.stake_usdc}
+                </Text>
+              </View>
+            )}
+
+            {/* Wallet address pill when connected */}
+            {challenge.stake_usdc > 0 && isConnected && walletAddress && (
+              <View style={styles.walletPill}>
+                <View style={styles.walletPillDot} />
+                <Text style={styles.walletPillText}>{formatAddress(walletAddress)}</Text>
+                <Text style={styles.walletPillBalance}>
+                  ${parseFloat(usdcFormatted).toFixed(2)} USDC
+                </Text>
+              </View>
+            )}
+
+            {/* TX confirmation banner */}
+            {txConfirmed && onChainJoin.txHash && (
+              <View style={styles.txBanner}>
+                <Text style={styles.txBannerText}>
+                  ✅ TX confirmed on Base
+                </Text>
+                <Text style={styles.txBannerHash} numberOfLines={1}>
+                  {onChainJoin.txHash.slice(0, 10)}...{onChainJoin.txHash.slice(-6)}
+                </Text>
+              </View>
+            )}
+
             <TouchableOpacity
-              style={[styles.joinBtn, joining && styles.joinBtnLoading]}
+              style={[
+                styles.joinBtn,
+                (joining || onChainJoin.isLoading) && styles.joinBtnLoading,
+              ]}
               onPress={handleJoin}
               activeOpacity={0.85}
-              disabled={joining}
+              disabled={joining || onChainJoin.isLoading}
             >
-              {joining ? (
-                <ActivityIndicator color="#FFFFFF" />
+              {joining || onChainJoin.isLoading ? (
+                <>
+                  <ActivityIndicator color="#FFFFFF" style={{ marginRight: 8 }} />
+                  <Text style={styles.joinBtnText}>
+                    {onChainJoin.isLoading ? 'Confirming on Base...' : 'Joining...'}
+                  </Text>
+                </>
               ) : (
                 <>
                   <Text style={styles.joinBtnText}>
@@ -758,6 +868,7 @@ const styles = StyleSheet.create({
     gap: 4,
     minHeight: 58,
     justifyContent: 'center',
+    flexDirection: 'row',
     shadowColor: C.primary,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.4,
@@ -788,5 +899,67 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: C.success,
+  },
+  // Wallet / on-chain UI styles
+  balanceWarning: {
+    backgroundColor: 'rgba(255,71,87,0.1)',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,71,87,0.3)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  balanceWarningText: {
+    fontSize: 12,
+    color: '#FF4757',
+    textAlign: 'center',
+  },
+  walletPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(0,82,255,0.1)',
+    borderRadius: 9999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(0,82,255,0.3)',
+    alignSelf: 'center',
+  },
+  walletPillDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#00FF87',
+  },
+  walletPillText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: C.textPrimary,
+  },
+  walletPillBalance: {
+    fontSize: 12,
+    color: C.success,
+    fontWeight: '600',
+  },
+  txBanner: {
+    backgroundColor: `${C.success}12`,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: `${C.success}30`,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    alignItems: 'center',
+    gap: 4,
+  },
+  txBannerText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: C.success,
+  },
+  txBannerHash: {
+    fontSize: 11,
+    color: C.textSecondary,
+    fontFamily: 'monospace',
   },
 });
