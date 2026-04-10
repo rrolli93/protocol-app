@@ -4,224 +4,132 @@ import {
   Text,
   StyleSheet,
   ScrollView,
-  FlatList,
   TouchableOpacity,
-  Switch,
-  StatusBar,
   Alert,
+  StatusBar,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { theme } from '../../constants/theme';
-import { WalletBadge } from '../../components/WalletBadge';
-import { PillarIcon } from '../../components/PillarIcon';
 import { useAuth } from '../../hooks/useAuth';
-import { useWallet } from '../../hooks/useWallet';
+import { useChallenges, getPillarEmoji } from '../../hooks/useChallenge';
+import { Challenge } from '../../lib/supabase';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface ConnectedSource {
-  id: string;
-  name: string;
-  icon: string;
-  color: string;
-  field: 'strava_connected' | 'oura_connected' | 'whoop_connected' | 'apple_health_connected';
-}
-
-interface ChallengeHistoryItem {
-  id: string;
-  name: string;
-  pillarId: string;
-  result: 'WIN' | 'LOSS';
-  earned: number;
-  endedAt: string;
-}
-
-// ─── Mock Data ────────────────────────────────────────────────────────────────
-
-const CONNECTED_SOURCES: ConnectedSource[] = [
-  {
-    id: 'strava',
-    name: 'Strava',
-    icon: '🏃',
-    color: theme.colors.strava,
-    field: 'strava_connected',
-  },
-  {
-    id: 'oura',
-    name: 'Oura Ring',
-    icon: '💍',
-    color: theme.colors.oura,
-    field: 'oura_connected',
-  },
-  {
-    id: 'whoop',
-    name: 'WHOOP',
-    icon: '⌚',
-    color: theme.colors.whoop,
-    field: 'whoop_connected',
-  },
-  {
-    id: 'apple',
-    name: 'Apple Health',
-    icon: '❤️',
-    color: theme.colors.apple,
-    field: 'apple_health_connected',
-  },
-];
-
-// Mock challenge history — replace with real Supabase query
-const MOCK_HISTORY: ChallengeHistoryItem[] = [
-  {
-    id: '1',
-    name: '30-Day Run Challenge',
-    pillarId: 'run',
-    result: 'WIN',
-    earned: 45.5,
-    endedAt: '2024-03-01',
-  },
-  {
-    id: '2',
-    name: 'Sleep Score Protocol',
-    pillarId: 'sleep',
-    result: 'LOSS',
-    earned: 0,
-    endedAt: '2024-02-15',
-  },
-  {
-    id: '3',
-    name: '100K Steps Sprint',
-    pillarId: 'walk',
-    result: 'WIN',
-    earned: 30,
-    endedAt: '2024-01-28',
-  },
-  {
-    id: '4',
-    name: 'Weekly Fast Protocol',
-    pillarId: 'fast',
-    result: 'WIN',
-    earned: 60,
-    endedAt: '2024-01-10',
-  },
-  {
-    id: '5',
-    name: 'HRV Boost Challenge',
-    pillarId: 'hrv',
-    result: 'LOSS',
-    earned: 0,
-    endedAt: '2023-12-20',
-  },
-];
+// ─── Design Tokens ────────────────────────────────────────────────────────────
+const C = {
+  bg: '#0A0A0F',
+  primary: '#6C63FF',
+  success: '#00FF87',
+  error: '#FF4757',
+  card: '#0D0D1A',
+  border: '#1A1A2E',
+  textPrimary: '#FFFFFF',
+  textSecondary: '#8888AA',
+  primaryMuted: 'rgba(108,99,255,0.12)',
+  successMuted: 'rgba(0,255,135,0.12)',
+};
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
-
 const StatCard: React.FC<{
   label: string;
   value: string | number;
-  prefix?: string;
-  suffix?: string;
-  highlight?: string;
-}> = ({ label, value, prefix, suffix, highlight }) => (
+  color?: string;
+}> = ({ label, value, color = C.textPrimary }) => (
   <View style={styles.statCard}>
-    <Text style={[styles.statValue, highlight ? { color: highlight } : null]}>
-      {prefix}
-      {value}
-      {suffix}
-    </Text>
+    <Text style={[styles.statValue, { color }]}>{value}</Text>
     <Text style={styles.statLabel}>{label}</Text>
   </View>
 );
 
-const SourceRow: React.FC<{
-  source: ConnectedSource;
-  enabled: boolean;
-  onToggle: (id: string, value: boolean) => void;
-}> = ({ source, enabled, onToggle }) => (
-  <View style={styles.sourceRow}>
-    <View style={[styles.sourceIconWrap, { backgroundColor: `${source.color}20` }]}>
-      <Text style={styles.sourceIcon}>{source.icon}</Text>
+const IntegrationRow: React.FC<{
+  icon: string;
+  label: string;
+  sublabel: string;
+  connected?: boolean;
+  onPress: () => void;
+}> = ({ icon, label, sublabel, connected, onPress }) => (
+  <TouchableOpacity style={styles.integrationRow} onPress={onPress} activeOpacity={0.75}>
+    <View style={styles.integrationIconWrap}>
+      <Text style={styles.integrationIcon}>{icon}</Text>
     </View>
-    <View style={styles.sourceInfo}>
-      <Text style={styles.sourceName}>{source.name}</Text>
-      <Text style={[styles.sourceStatus, { color: enabled ? theme.colors.win : theme.colors.textMuted }]}>
-        {enabled ? 'Connected' : 'Not connected'}
+    <View style={styles.integrationInfo}>
+      <Text style={styles.integrationLabel}>{label}</Text>
+      <Text
+        style={[
+          styles.integrationSublabel,
+          connected && { color: C.success },
+        ]}
+      >
+        {sublabel}
       </Text>
     </View>
-    <Switch
-      value={enabled}
-      onValueChange={(v) => onToggle(source.id, v)}
-      trackColor={{
-        false: theme.colors.border,
-        true: `${theme.colors.accent}60`,
-      }}
-      thumbColor={enabled ? theme.colors.accent : theme.colors.textMuted}
-      ios_backgroundColor={theme.colors.border}
-    />
-  </View>
+    <View
+      style={[
+        styles.integrationBadge,
+        connected ? styles.integrationBadgeConnected : styles.integrationBadgeIdle,
+      ]}
+    >
+      <Text
+        style={[
+          styles.integrationBadgeText,
+          connected && { color: C.success },
+        ]}
+      >
+        {connected ? 'Connected' : 'Connect'}
+      </Text>
+    </View>
+  </TouchableOpacity>
 );
 
-const HistoryItem: React.FC<{ item: ChallengeHistoryItem }> = ({ item }) => {
-  const isWin = item.result === 'WIN';
+const ActiveChallengeRow: React.FC<{
+  item: Challenge;
+  onPress: () => void;
+}> = ({ item, onPress }) => {
+  const emoji = getPillarEmoji(item.pillar_id);
+  const daysLeft = Math.max(
+    0,
+    Math.ceil((new Date(item.ends_at).getTime() - Date.now()) / 86400000)
+  );
+
   return (
-    <View style={styles.historyItem}>
-      <PillarIcon pillarId={item.pillarId} size="sm" />
-      <View style={styles.historyInfo}>
-        <Text style={styles.historyName} numberOfLines={1}>
+    <TouchableOpacity style={styles.challengeRow} onPress={onPress} activeOpacity={0.8}>
+      <Text style={styles.challengeEmoji}>{emoji}</Text>
+      <View style={styles.challengeInfo}>
+        <Text style={styles.challengeName} numberOfLines={1}>
           {item.name}
         </Text>
-        <Text style={styles.historyDate}>{formatDate(item.endedAt)}</Text>
+        <Text style={styles.challengeMeta}>
+          {daysLeft}d remaining
+          {item.total_pot_usdc > 0 ? ` · $${item.total_pot_usdc} pot` : ''}
+        </Text>
       </View>
-      <View style={styles.historyRight}>
-        <View
-          style={[
-            styles.resultBadge,
-            isWin ? styles.resultBadgeWin : styles.resultBadgeLoss,
-          ]}
-        >
-          <Text
-            style={[
-              styles.resultBadgeText,
-              isWin ? styles.resultWinText : styles.resultLossText,
-            ]}
-          >
-            {item.result}
-          </Text>
-        </View>
-        {isWin && item.earned > 0 && (
-          <Text style={styles.earnedAmount}>+${item.earned.toFixed(0)}</Text>
-        )}
-      </View>
-    </View>
+      <Text style={styles.challengeArrow}>›</Text>
+    </TouchableOpacity>
   );
 };
 
-function formatDate(dateStr: string): string {
-  const d = new Date(dateStr);
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-// ─── Main Screen ──────────────────────────────────────────────────────────────
-
+// ─── Profile Screen ───────────────────────────────────────────────────────────
 export default function ProfileScreen() {
   const router = useRouter();
   const { user, profile, signOut } = useAuth();
-  const { address, balanceUsdc, isConnected } = useWallet();
+  const [signingOut, setSigningOut] = useState(false);
 
-  const [sourceToggles, setSourceToggles] = useState({
-    strava: profile?.strava_connected ?? false,
-    oura: profile?.oura_connected ?? false,
-    whoop: profile?.whoop_connected ?? false,
-    apple: profile?.apple_health_connected ?? false,
-  });
+  const { challenges: activeChallenges, loading: challengesLoading } = useChallenges(user?.id);
 
-  const handleSourceToggle = useCallback(
-    (id: string, value: boolean) => {
-      setSourceToggles((prev) => ({ ...prev, [id]: value }));
-      // TODO: persist to Supabase profiles table
-    },
-    []
-  );
+  const username =
+    profile?.username ?? user?.email?.split('@')[0] ?? 'athlete';
+  const displayName = profile?.handle
+    ? `@${profile.handle}`
+    : user?.email ?? '';
+  const initials = username.slice(0, 2).toUpperCase();
+  const walletAddress = profile?.wallet_address ?? null;
+
+  const totalWon = profile?.challenges_won ?? 0;
+  const totalEarned = profile?.total_earned_usdc ?? 0;
+  const streak = profile?.current_streak ?? 0;
+
+  const stravaConnected = profile?.strava_connected ?? false;
+  const appleConnected = profile?.apple_health_connected ?? false;
 
   const handleSignOut = useCallback(() => {
     Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
@@ -229,17 +137,24 @@ export default function ProfileScreen() {
       {
         text: 'Sign Out',
         style: 'destructive',
-        onPress: signOut,
+        onPress: async () => {
+          setSigningOut(true);
+          try {
+            await signOut();
+            router.replace('/(auth)/welcome');
+          } catch (err: any) {
+            Alert.alert('Error', err?.message ?? 'Could not sign out.');
+          } finally {
+            setSigningOut(false);
+          }
+        },
       },
     ]);
-  }, [signOut]);
+  }, [signOut, router]);
 
-  const username = profile?.username ?? user?.email?.split('@')[0] ?? 'athlete';
-  const initials = username.slice(0, 2).toUpperCase();
-
-  const totalWon = profile?.challenges_won ?? 0;
-  const totalEarned = profile?.total_earned_usdc ?? 0;
-  const streak = profile?.current_streak ?? 0;
+  const handleIntegrationPress = (label: string) => {
+    Alert.alert(`${label} Integration`, 'Integration coming soon in a future update!');
+  };
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -249,11 +164,8 @@ export default function ProfileScreen() {
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Profile</Text>
         <TouchableOpacity
-          style={styles.settingsButton}
-          onPress={() => {
-            // TODO: navigate to settings screen
-            Alert.alert('Settings', 'Settings screen coming soon.');
-          }}
+          style={styles.settingsBtn}
+          onPress={() => Alert.alert('Settings', 'Settings screen coming soon.')}
           activeOpacity={0.7}
         >
           <Text style={styles.settingsIcon}>⚙️</Text>
@@ -261,9 +173,9 @@ export default function ProfileScreen() {
       </View>
 
       <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
-        {/* Avatar + Identity */}
+        {/* ── Avatar + Identity ───────────────────────────────────────────── */}
         <View style={styles.identitySection}>
-          <View style={styles.avatarContainer}>
+          <View style={styles.avatarWrap}>
             <View style={styles.avatar}>
               <Text style={styles.avatarInitials}>{initials}</Text>
             </View>
@@ -271,77 +183,102 @@ export default function ProfileScreen() {
           </View>
 
           <Text style={styles.username}>{username}</Text>
-          {profile?.handle && (
-            <Text style={styles.handle}>@{profile.handle}</Text>
-          )}
+          {displayName ? (
+            <Text style={styles.displayName}>{displayName}</Text>
+          ) : null}
 
-          {isConnected && address ? (
-            <WalletBadge
-              address={address}
-              balance={balanceUsdc}
-              style={styles.walletBadge}
-            />
+          {walletAddress ? (
+            <View style={styles.walletRow}>
+              <Text style={styles.walletIcon}>⬡</Text>
+              <Text style={styles.walletAddress}>
+                {walletAddress.slice(0, 8)}...{walletAddress.slice(-6)}
+              </Text>
+            </View>
           ) : (
             <TouchableOpacity
-              style={styles.connectWalletCta}
-              onPress={() => router.push('/(auth)/login')}
+              style={styles.connectWalletBtn}
+              onPress={() => Alert.alert('Wallet', 'Wallet connection coming soon.')}
             >
-              <Text style={styles.connectWalletCtaText}>⬡ Connect Wallet</Text>
+              <Text style={styles.connectWalletText}>⬡ Connect Wallet</Text>
             </TouchableOpacity>
           )}
         </View>
 
-        {/* Stats Row */}
+        {/* ── Stats Row ────────────────────────────────────────────────────── */}
         <View style={styles.statsRow}>
-          <StatCard label="Won" value={totalWon} highlight={theme.colors.win} />
-          <View style={styles.statsDivider} />
+          <StatCard label="Won" value={totalWon} color={C.success} />
+          <View style={styles.statDivider} />
           <StatCard
             label="Earned"
-            value={totalEarned.toFixed(0)}
-            prefix="$"
-            suffix=" USDC"
-            highlight={theme.colors.win}
+            value={`$${totalEarned.toFixed(0)}`}
+            color={C.success}
           />
-          <View style={styles.statsDivider} />
-          <StatCard label="Streak" value={streak} suffix="d" highlight={theme.colors.accent} />
+          <View style={styles.statDivider} />
+          <StatCard label="Streak" value={`${streak}d`} color={C.primary} />
         </View>
 
-        {/* Connected Sources */}
+        {/* ── Integrations ─────────────────────────────────────────────────── */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Connected Sources</Text>
+          <Text style={styles.sectionTitle}>Integrations</Text>
           <View style={styles.sectionCard}>
-            {CONNECTED_SOURCES.map((source, idx) => (
-              <View key={source.id}>
-                <SourceRow
-                  source={source}
-                  enabled={sourceToggles[source.id as keyof typeof sourceToggles]}
-                  onToggle={handleSourceToggle}
-                />
-                {idx < CONNECTED_SOURCES.length - 1 && (
-                  <View style={styles.rowDivider} />
-                )}
-              </View>
-            ))}
+            <IntegrationRow
+              icon="🏃"
+              label="Strava"
+              sublabel={stravaConnected ? 'Connected' : 'Track runs & rides'}
+              connected={stravaConnected}
+              onPress={() => handleIntegrationPress('Strava')}
+            />
+            <View style={styles.rowDivider} />
+            <IntegrationRow
+              icon="❤️"
+              label="Apple Health"
+              sublabel={appleConnected ? 'Connected' : 'Sleep, steps & more'}
+              connected={appleConnected}
+              onPress={() => handleIntegrationPress('Apple Health')}
+            />
+            <View style={styles.rowDivider} />
+            <IntegrationRow
+              icon="⬡"
+              label="Wallet Address"
+              sublabel={
+                walletAddress
+                  ? `${walletAddress.slice(0, 8)}...${walletAddress.slice(-6)}`
+                  : 'Not connected'
+              }
+              connected={!!walletAddress}
+              onPress={() => handleIntegrationPress('Wallet')}
+            />
           </View>
         </View>
 
-        {/* Challenge History */}
+        {/* ── Active Challenges ─────────────────────────────────────────────── */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Challenge History</Text>
-          {MOCK_HISTORY.length === 0 ? (
-            <View style={styles.emptyHistory}>
-              <Text style={styles.emptyHistoryIcon}>📜</Text>
-              <Text style={styles.emptyHistoryText}>No completed challenges yet.</Text>
-              <Text style={styles.emptyHistorySubtext}>
-                Join a challenge and write your history.
-              </Text>
+          <Text style={styles.sectionTitle}>Active Challenges</Text>
+
+          {challengesLoading ? (
+            <View style={styles.loadingBox}>
+              <ActivityIndicator color={C.primary} />
+            </View>
+          ) : activeChallenges.length === 0 ? (
+            <View style={styles.emptyCard}>
+              <Text style={styles.emptyIcon}>🏆</Text>
+              <Text style={styles.emptyText}>No active challenges</Text>
+              <TouchableOpacity
+                onPress={() => router.push('/(tabs)/explore')}
+                style={styles.exploreBtn}
+              >
+                <Text style={styles.exploreBtnText}>Explore →</Text>
+              </TouchableOpacity>
             </View>
           ) : (
             <View style={styles.sectionCard}>
-              {MOCK_HISTORY.map((item, idx) => (
+              {activeChallenges.map((item, idx) => (
                 <View key={item.id}>
-                  <HistoryItem item={item} />
-                  {idx < MOCK_HISTORY.length - 1 && (
+                  <ActiveChallengeRow
+                    item={item}
+                    onPress={() => router.push(`/challenge/${item.id}`)}
+                  />
+                  {idx < activeChallenges.length - 1 && (
                     <View style={styles.rowDivider} />
                   )}
                 </View>
@@ -350,14 +287,19 @@ export default function ProfileScreen() {
           )}
         </View>
 
-        {/* Sign Out */}
+        {/* ── Sign Out ──────────────────────────────────────────────────────── */}
         <View style={styles.section}>
           <TouchableOpacity
-            style={styles.signOutButton}
+            style={styles.signOutBtn}
             onPress={handleSignOut}
-            activeOpacity={0.7}
+            activeOpacity={0.75}
+            disabled={signingOut}
           >
-            <Text style={styles.signOutText}>Sign Out</Text>
+            {signingOut ? (
+              <ActivityIndicator color={C.error} />
+            ) : (
+              <Text style={styles.signOutText}>Sign Out</Text>
+            )}
           </TouchableOpacity>
         </View>
 
@@ -368,30 +310,28 @@ export default function ProfileScreen() {
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: theme.colors.background,
+    backgroundColor: C.bg,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: theme.spacing.xl,
-    paddingVertical: theme.spacing.md,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
+    borderBottomColor: C.border,
   },
   headerTitle: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.xl,
-    fontWeight: theme.typography.fontWeight.bold,
-    color: theme.colors.textPrimary,
+    fontSize: 20,
+    fontWeight: '700',
+    color: C.textPrimary,
     letterSpacing: 1,
   },
-  settingsButton: {
-    padding: theme.spacing.sm,
+  settingsBtn: {
+    padding: 6,
   },
   settingsIcon: {
     fontSize: 22,
@@ -399,24 +339,23 @@ const styles = StyleSheet.create({
   scroll: {
     flex: 1,
   },
-  // Identity
   identitySection: {
     alignItems: 'center',
-    paddingVertical: theme.spacing.xxxl,
-    paddingHorizontal: theme.spacing.xl,
-    gap: theme.spacing.md,
+    paddingVertical: 32,
+    paddingHorizontal: 20,
+    gap: 10,
   },
-  avatarContainer: {
+  avatarWrap: {
     position: 'relative',
-    marginBottom: theme.spacing.sm,
+    marginBottom: 4,
   },
   avatar: {
     width: 88,
     height: 88,
     borderRadius: 44,
-    backgroundColor: theme.colors.accentMuted,
+    backgroundColor: C.primaryMuted,
     borderWidth: 2,
-    borderColor: `${theme.colors.accent}60`,
+    borderColor: `${C.primary}60`,
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 1,
@@ -428,243 +367,239 @@ const styles = StyleSheet.create({
     width: 96,
     height: 96,
     borderRadius: 48,
-    backgroundColor: theme.colors.accent,
+    backgroundColor: C.primary,
     opacity: 0.08,
     zIndex: 0,
   },
   avatarInitials: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.xxl,
-    fontWeight: theme.typography.fontWeight.bold,
-    color: theme.colors.accent,
+    fontSize: 26,
+    fontWeight: '700',
+    color: C.primary,
   },
   username: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.xl,
-    fontWeight: theme.typography.fontWeight.bold,
-    color: theme.colors.textPrimary,
+    fontSize: 22,
+    fontWeight: '700',
+    color: C.textPrimary,
     letterSpacing: 0.5,
   },
-  handle: {
-    fontFamily: theme.typography.fontFamily.mono,
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.textSecondary,
-    letterSpacing: 0.5,
+  displayName: {
+    fontSize: 13,
+    color: C.textSecondary,
+    letterSpacing: 0.3,
   },
-  walletBadge: {
-    width: '100%',
-    marginTop: theme.spacing.sm,
-  },
-  connectWalletCta: {
-    backgroundColor: theme.colors.accentMuted,
-    paddingHorizontal: theme.spacing.xl,
-    paddingVertical: theme.spacing.md,
-    borderRadius: theme.borderRadius.full,
+  walletRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: C.card,
     borderWidth: 1,
-    borderColor: `${theme.colors.accent}40`,
-    marginTop: theme.spacing.sm,
+    borderColor: C.border,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 9999,
+    marginTop: 2,
   },
-  connectWalletCtaText: {
-    fontFamily: theme.typography.fontFamily.mono,
-    fontSize: theme.typography.fontSize.sm,
-    fontWeight: theme.typography.fontWeight.semibold,
-    color: theme.colors.accent,
+  walletIcon: {
+    fontSize: 14,
+    color: C.primary,
   },
-  // Stats
+  walletAddress: {
+    fontSize: 12,
+    color: C.textSecondary,
+    fontWeight: '500',
+  },
+  connectWalletBtn: {
+    backgroundColor: C.primaryMuted,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 9999,
+    borderWidth: 1,
+    borderColor: `${C.primary}40`,
+    marginTop: 2,
+  },
+  connectWalletText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: C.primary,
+  },
   statsRow: {
     flexDirection: 'row',
-    marginHorizontal: theme.spacing.xl,
-    marginBottom: theme.spacing.xxl,
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.lg,
+    marginHorizontal: 20,
+    marginBottom: 28,
+    backgroundColor: C.card,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: C.border,
     overflow: 'hidden',
-    ...theme.shadows.card,
   },
   statCard: {
     flex: 1,
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: theme.spacing.lg,
-    paddingHorizontal: theme.spacing.sm,
-    gap: 4,
+    paddingVertical: 18,
+    gap: 3,
   },
   statValue: {
-    fontFamily: theme.typography.fontFamily.mono,
-    fontSize: theme.typography.fontSize.xl,
-    fontWeight: theme.typography.fontWeight.bold,
-    color: theme.colors.textPrimary,
+    fontSize: 20,
+    fontWeight: '700',
+    color: C.textPrimary,
   },
   statLabel: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
+    fontSize: 11,
+    color: C.textSecondary,
   },
-  statsDivider: {
+  statDivider: {
     width: 1,
-    backgroundColor: theme.colors.border,
-    marginVertical: theme.spacing.md,
+    marginVertical: 12,
+    backgroundColor: C.border,
   },
-  // Sections
   section: {
-    marginHorizontal: theme.spacing.xl,
-    marginBottom: theme.spacing.xxl,
+    marginHorizontal: 20,
+    marginBottom: 28,
+    gap: 10,
   },
   sectionTitle: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: theme.typography.fontWeight.semibold,
-    color: theme.colors.textPrimary,
-    marginBottom: theme.spacing.md,
-    letterSpacing: 0.3,
+    fontSize: 14,
+    fontWeight: '700',
+    color: C.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
   },
   sectionCard: {
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.lg,
+    backgroundColor: C.card,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: C.border,
     overflow: 'hidden',
-    ...theme.shadows.card,
   },
   rowDivider: {
     height: 1,
-    backgroundColor: theme.colors.border,
-    marginLeft: theme.spacing.xl + 44, // indent past icon
+    backgroundColor: C.border,
+    marginLeft: 16,
   },
-  // Connected Sources
-  sourceRow: {
+  // Integrations
+  integrationRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.md,
-    gap: theme.spacing.md,
+    padding: 14,
+    gap: 12,
   },
-  sourceIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: theme.borderRadius.md,
+  integrationIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: C.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  sourceIcon: {
-    fontSize: 20,
+  integrationIcon: {
+    fontSize: 18,
   },
-  sourceInfo: {
+  integrationInfo: {
     flex: 1,
-    gap: 2,
   },
-  sourceName: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: theme.typography.fontWeight.medium,
-    color: theme.colors.textPrimary,
+  integrationLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: C.textPrimary,
   },
-  sourceStatus: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.xs,
-    fontWeight: theme.typography.fontWeight.medium,
+  integrationSublabel: {
+    fontSize: 12,
+    color: C.textSecondary,
+    marginTop: 2,
   },
-  // Challenge History
-  historyItem: {
+  integrationBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 9999,
+    borderWidth: 1,
+  },
+  integrationBadgeConnected: {
+    backgroundColor: `${C.success}12`,
+    borderColor: `${C.success}40`,
+  },
+  integrationBadgeIdle: {
+    backgroundColor: C.primaryMuted,
+    borderColor: `${C.primary}40`,
+  },
+  integrationBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: C.primary,
+  },
+  // Active challenges
+  loadingBox: {
+    backgroundColor: C.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    height: 60,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyCard: {
+    backgroundColor: C.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 24,
+    alignItems: 'center',
+    gap: 8,
+  },
+  emptyIcon: {
+    fontSize: 28,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: C.textSecondary,
+  },
+  exploreBtn: {
+    marginTop: 4,
+  },
+  exploreBtnText: {
+    fontSize: 13,
+    color: C.primary,
+    fontWeight: '600',
+  },
+  challengeRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.md,
-    gap: theme.spacing.md,
+    padding: 14,
+    gap: 12,
   },
-  historyInfo: {
+  challengeEmoji: {
+    fontSize: 24,
+  },
+  challengeInfo: {
     flex: 1,
-    gap: 3,
   },
-  historyName: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: theme.typography.fontWeight.medium,
-    color: theme.colors.textPrimary,
+  challengeName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: C.textPrimary,
   },
-  historyDate: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.textMuted,
+  challengeMeta: {
+    fontSize: 12,
+    color: C.textSecondary,
+    marginTop: 2,
   },
-  historyRight: {
-    alignItems: 'flex-end',
-    gap: 4,
+  challengeArrow: {
+    fontSize: 20,
+    color: C.textSecondary,
   },
-  resultBadge: {
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 3,
-    borderRadius: theme.borderRadius.sm,
+  // Sign out
+  signOutBtn: {
+    backgroundColor: C.card,
     borderWidth: 1,
-  },
-  resultBadgeWin: {
-    backgroundColor: theme.colors.winMuted,
-    borderColor: `${theme.colors.win}40`,
-  },
-  resultBadgeLoss: {
-    backgroundColor: theme.colors.lossMuted,
-    borderColor: `${theme.colors.loss}40`,
-  },
-  resultBadgeText: {
-    fontFamily: theme.typography.fontFamily.mono,
-    fontSize: theme.typography.fontSize.xs,
-    fontWeight: theme.typography.fontWeight.bold,
-    letterSpacing: 0.5,
-  },
-  resultWinText: {
-    color: theme.colors.win,
-  },
-  resultLossText: {
-    color: theme.colors.loss,
-  },
-  earnedAmount: {
-    fontFamily: theme.typography.fontFamily.mono,
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.win,
-    fontWeight: theme.typography.fontWeight.semibold,
-  },
-  // Empty state
-  emptyHistory: {
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderStyle: 'dashed',
-    padding: theme.spacing.xxl,
+    borderColor: `${C.error}40`,
+    borderRadius: 12,
+    paddingVertical: 16,
     alignItems: 'center',
-    gap: theme.spacing.sm,
-  },
-  emptyHistoryIcon: {
-    fontSize: 32,
-  },
-  emptyHistoryText: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: theme.typography.fontWeight.semibold,
-    color: theme.colors.textPrimary,
-  },
-  emptyHistorySubtext: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.textSecondary,
-    textAlign: 'center',
-  },
-  // Sign Out
-  signOutButton: {
-    backgroundColor: theme.colors.lossMuted,
-    borderWidth: 1,
-    borderColor: `${theme.colors.loss}30`,
-    borderRadius: theme.borderRadius.md,
-    paddingVertical: theme.spacing.lg,
-    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 52,
   },
   signOutText: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: theme.typography.fontWeight.semibold,
-    color: theme.colors.loss,
+    fontSize: 15,
+    fontWeight: '700',
+    color: C.error,
   },
 });

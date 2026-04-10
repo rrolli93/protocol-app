@@ -9,31 +9,96 @@ import {
   FlatList,
   RefreshControl,
   ActivityIndicator,
+  Alert,
   StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { theme } from '../../constants/theme';
-import { ChallengeCard } from '../../components/ChallengeCard';
-import { useChallenges } from '../../hooks/useChallenge';
-import { PILLARS } from '../../constants/pillars';
+import { useRouter } from 'expo-router';
+import { usePublicChallenges, useJoinChallenge, getPillarEmoji } from '../../hooks/useChallenge';
+import { useAuth } from '../../hooks/useAuth';
+import { Challenge } from '../../lib/supabase';
 
-const FILTER_ALL = 'all';
+// ─── Design Tokens ────────────────────────────────────────────────────────────
+const C = {
+  bg: '#0A0A0F',
+  primary: '#6C63FF',
+  success: '#00FF87',
+  error: '#FF4757',
+  card: '#0D0D1A',
+  border: '#1A1A2E',
+  textPrimary: '#FFFFFF',
+  textSecondary: '#8888AA',
+  primaryMuted: 'rgba(108,99,255,0.12)',
+  successMuted: 'rgba(0,255,135,0.12)',
+};
 
-const FILTERS = [
-  { id: FILTER_ALL, label: 'ALL' },
-  ...PILLARS.slice(0, 7).map((p) => ({ id: p.id, label: p.name })),
+// ─── Pillar filter options ────────────────────────────────────────────────────
+const PILLAR_FILTERS = [
+  { id: 'all', label: 'All', emoji: '✨' },
+  { id: 'run', label: 'Run', emoji: '🏃' },
+  { id: 'fast', label: 'Fast', emoji: '⚡' },
+  { id: 'sleep', label: 'Sleep', emoji: '🌙' },
+  { id: 'meditate', label: 'Meditate', emoji: '🧘' },
+  { id: 'cycle', label: 'Cycle', emoji: '🚴' },
+  { id: 'walk', label: 'Walk', emoji: '🚶' },
 ];
 
-export default function ExploreScreen() {
-  const [searchText, setSearchText] = useState('');
-  const [activeFilter, setActiveFilter] = useState(FILTER_ALL);
-  const [refreshing, setRefreshing] = useState(false);
+// ─── Challenge Grid Card ──────────────────────────────────────────────────────
+interface GridCardProps {
+  item: Challenge;
+  userId?: string;
+  onJoin: (challenge: Challenge) => void;
+  onPress: () => void;
+  joining: boolean;
+}
 
-  const { challenges, loading, refresh } = useChallenges({
-    status: 'active',
-    pillarId: activeFilter !== FILTER_ALL ? activeFilter : undefined,
-    limit: 50,
-  });
+const GridCard: React.FC<GridCardProps> = ({ item, onJoin, onPress, joining }) => {
+  const emoji = getPillarEmoji(item.pillar_id);
+
+  return (
+    <TouchableOpacity style={styles.gridCard} onPress={onPress} activeOpacity={0.8}>
+      <Text style={styles.gridEmoji}>{emoji}</Text>
+      <Text style={styles.gridName} numberOfLines={2}>{item.name}</Text>
+
+      <View style={styles.gridMeta}>
+        <Text style={styles.gridMetaText}>👥 {item.participant_count}</Text>
+        {item.total_pot_usdc > 0 ? (
+          <Text style={[styles.gridMetaText, { color: C.success }]}>
+            ${item.total_pot_usdc}
+          </Text>
+        ) : (
+          <Text style={styles.gridMetaText}>Free</Text>
+        )}
+      </View>
+
+      <TouchableOpacity
+        style={[styles.joinBtn, joining && styles.joinBtnLoading]}
+        onPress={() => onJoin(item)}
+        activeOpacity={0.75}
+        disabled={joining}
+      >
+        {joining ? (
+          <ActivityIndicator size="small" color={C.primary} />
+        ) : (
+          <Text style={styles.joinBtnText}>Join</Text>
+        )}
+      </TouchableOpacity>
+    </TouchableOpacity>
+  );
+};
+
+// ─── Explore Screen ──────────────────────────────────────────────────────────
+export default function ExploreScreen() {
+  const router = useRouter();
+  const { user } = useAuth();
+  const [searchText, setSearchText] = useState('');
+  const [activeFilter, setActiveFilter] = useState('all');
+  const [refreshing, setRefreshing] = useState(false);
+  const [joiningId, setJoiningId] = useState<string | null>(null);
+
+  const filter = activeFilter !== 'all' ? activeFilter : undefined;
+  const { challenges, loading, refresh, isRefetching } = usePublicChallenges(filter);
+  const joinMutation = useJoinChallenge();
 
   const filteredChallenges = useMemo(() => {
     if (!searchText.trim()) return challenges;
@@ -51,12 +116,42 @@ export default function ExploreScreen() {
     setRefreshing(false);
   }, [refresh]);
 
-  const handleFilterPress = useCallback((filterId: string) => {
-    setActiveFilter(filterId);
-    setSearchText('');
-  }, []);
+  const handleJoin = useCallback(
+    async (challenge: Challenge) => {
+      if (!user?.id) {
+        Alert.alert('Sign In Required', 'Please sign in to join a challenge.');
+        return;
+      }
+      setJoiningId(challenge.id);
+      try {
+        await joinMutation.mutateAsync({
+          challenge_id: challenge.id,
+          user_id: user.id,
+          stake_usdc: challenge.stake_usdc,
+        });
+        Alert.alert('Joined! 🎉', `You've joined "${challenge.name}". Good luck!`);
+        router.push(`/challenge/${challenge.id}`);
+      } catch (err: any) {
+        Alert.alert('Could not join', err?.message ?? 'Try again.');
+      } finally {
+        setJoiningId(null);
+      }
+    },
+    [user?.id, joinMutation, router]
+  );
 
-  const pillar = PILLARS.find((p) => p.id === activeFilter);
+  const renderCard = useCallback(
+    ({ item }: { item: Challenge }) => (
+      <GridCard
+        item={item}
+        userId={user?.id}
+        onJoin={handleJoin}
+        onPress={() => router.push(`/challenge/${item.id}`)}
+        joining={joiningId === item.id}
+      />
+    ),
+    [user?.id, handleJoin, joiningId, router]
+  );
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -64,8 +159,8 @@ export default function ExploreScreen() {
 
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Discover</Text>
-        <Text style={styles.headerSubtitle}>
+        <Text style={styles.headerTitle}>Explore</Text>
+        <Text style={styles.headerCount}>
           {filteredChallenges.length} challenge{filteredChallenges.length !== 1 ? 's' : ''}
         </Text>
       </View>
@@ -77,7 +172,7 @@ export default function ExploreScreen() {
           <TextInput
             style={styles.searchInput}
             placeholder="Search challenges..."
-            placeholderTextColor={theme.colors.textMuted}
+            placeholderTextColor={C.textSecondary}
             value={searchText}
             onChangeText={setSearchText}
             returnKeyType="search"
@@ -97,67 +192,47 @@ export default function ExploreScreen() {
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.filtersRow}
-        style={styles.filtersScrollView}
+        style={styles.filtersScroll}
       >
-        {FILTERS.map((filter) => {
-          const isActive = activeFilter === filter.id;
-          const filterPillar = PILLARS.find((p) => p.id === filter.id);
+        {PILLAR_FILTERS.map((f) => {
+          const isActive = activeFilter === f.id;
           return (
             <TouchableOpacity
-              key={filter.id}
-              onPress={() => handleFilterPress(filter.id)}
+              key={f.id}
+              onPress={() => setActiveFilter(f.id)}
               activeOpacity={0.75}
-              style={[
-                styles.filterPill,
-                isActive && styles.filterPillActive,
-                isActive && filterPillar && { borderColor: filterPillar.color, backgroundColor: filterPillar.accentColor },
-              ]}
+              style={[styles.filterPill, isActive && styles.filterPillActive]}
             >
-              {filterPillar && (
-                <Text style={styles.filterEmoji}>{filterPillar.icon}</Text>
-              )}
-              <Text
-                style={[
-                  styles.filterLabel,
-                  isActive && styles.filterLabelActive,
-                  isActive && filterPillar && { color: filterPillar.color },
-                ]}
-              >
-                {filter.label}
+              <Text style={styles.filterEmoji}>{f.emoji}</Text>
+              <Text style={[styles.filterLabel, isActive && styles.filterLabelActive]}>
+                {f.label}
               </Text>
             </TouchableOpacity>
           );
         })}
       </ScrollView>
 
-      {/* Active filter banner */}
-      {activeFilter !== FILTER_ALL && pillar && (
-        <View style={[styles.filterBanner, { backgroundColor: pillar.accentColor }]}>
-          <Text style={[styles.filterBannerIcon]}>{pillar.icon}</Text>
-          <Text style={[styles.filterBannerText, { color: pillar.color }]}>
-            {pillar.name} — {pillar.description}
-          </Text>
-          <TouchableOpacity onPress={() => setActiveFilter(FILTER_ALL)}>
-            <Text style={[styles.filterBannerClear, { color: pillar.color }]}>✕</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
       {/* Grid */}
       {loading && !refreshing ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.colors.accent} />
+          <ActivityIndicator size="large" color={C.primary} />
           <Text style={styles.loadingText}>Loading challenges...</Text>
         </View>
       ) : filteredChallenges.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <Text style={styles.emptyIcon}>
-            {activeFilter !== FILTER_ALL ? pillar?.icon ?? '🔍' : '🔍'}
-          </Text>
+          <Text style={styles.emptyIcon}>🔍</Text>
           <Text style={styles.emptyTitle}>No challenges found</Text>
           <Text style={styles.emptySubtext}>
-            {searchText ? `No results for "${searchText}"` : 'Be the first to create one!'}
+            {searchText
+              ? `No results for "${searchText}"`
+              : 'Be the first to create one!'}
           </Text>
+          <TouchableOpacity
+            style={styles.createBtn}
+            onPress={() => router.push('/(tabs)/create')}
+          >
+            <Text style={styles.createBtnText}>+ Create Challenge</Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <FlatList
@@ -171,15 +246,10 @@ export default function ExploreScreen() {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={handleRefresh}
-              tintColor={theme.colors.accent}
+              tintColor={C.primary}
             />
           }
-          renderItem={({ item }) => (
-            <ChallengeCard
-              challenge={item}
-              style={styles.gridCard}
-            />
-          )}
+          renderItem={renderCard}
           ListFooterComponent={<View style={{ height: 100 }} />}
         />
       )}
@@ -187,161 +257,187 @@ export default function ExploreScreen() {
   );
 }
 
+// ─── Styles ───────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: theme.colors.background,
+    backgroundColor: C.bg,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'baseline',
     justifyContent: 'space-between',
-    paddingHorizontal: theme.spacing.xl,
-    paddingTop: theme.spacing.md,
-    paddingBottom: theme.spacing.sm,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 10,
   },
   headerTitle: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.xxl,
+    fontSize: 26,
     fontWeight: '700',
-    color: theme.colors.textPrimary,
+    color: C.textPrimary,
   },
-  headerSubtitle: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.textSecondary,
+  headerCount: {
+    fontSize: 13,
+    color: C.textSecondary,
   },
   searchContainer: {
-    paddingHorizontal: theme.spacing.xl,
-    paddingBottom: theme.spacing.md,
+    paddingHorizontal: 20,
+    paddingBottom: 12,
   },
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.md,
+    backgroundColor: C.card,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.md,
-    gap: theme.spacing.sm,
+    borderColor: C.border,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
   },
   searchIcon: {
-    fontSize: 16,
+    fontSize: 15,
   },
   searchInput: {
     flex: 1,
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.md,
-    color: theme.colors.textPrimary,
+    fontSize: 14,
+    color: C.textPrimary,
     padding: 0,
   },
   clearIcon: {
-    fontSize: 14,
-    color: theme.colors.textMuted,
+    fontSize: 13,
+    color: C.textSecondary,
     padding: 4,
   },
-  filtersScrollView: {
+  filtersScroll: {
     maxHeight: 48,
-    marginBottom: theme.spacing.md,
+    marginBottom: 12,
   },
   filtersRow: {
-    paddingHorizontal: theme.spacing.xl,
-    gap: theme.spacing.sm,
+    paddingHorizontal: 20,
+    gap: 8,
     alignItems: 'center',
   },
   filterPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: 8,
-    borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.card,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 9999,
+    backgroundColor: C.card,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: C.border,
   },
   filterPillActive: {
-    borderColor: theme.colors.accent,
-    backgroundColor: theme.colors.accentMuted,
+    borderColor: C.primary,
+    backgroundColor: C.primaryMuted,
   },
   filterEmoji: {
-    fontSize: 12,
+    fontSize: 13,
   },
   filterLabel: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.xs,
+    fontSize: 12,
     fontWeight: '600',
-    color: theme.colors.textSecondary,
-    letterSpacing: 0.5,
+    color: C.textSecondary,
   },
   filterLabelActive: {
-    color: theme.colors.accent,
-  },
-  filterBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginHorizontal: theme.spacing.xl,
-    marginBottom: theme.spacing.md,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
-    borderRadius: theme.borderRadius.md,
-    gap: theme.spacing.sm,
-  },
-  filterBannerIcon: {
-    fontSize: 16,
-  },
-  filterBannerText: {
-    flex: 1,
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.xs,
-    fontWeight: '500',
-  },
-  filterBannerClear: {
-    fontSize: 14,
-    padding: 4,
+    color: C.primary,
   },
   loadingContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: theme.spacing.md,
+    gap: 12,
   },
   loadingText: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.textSecondary,
+    fontSize: 13,
+    color: C.textSecondary,
   },
   emptyContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: theme.spacing.md,
-    paddingHorizontal: theme.spacing.xxl,
+    gap: 10,
+    paddingHorizontal: 32,
   },
   emptyIcon: {
     fontSize: 48,
   },
   emptyTitle: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.lg,
-    fontWeight: '600',
-    color: theme.colors.textPrimary,
+    fontSize: 18,
+    fontWeight: '700',
+    color: C.textPrimary,
   },
   emptySubtext: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.textSecondary,
+    fontSize: 13,
+    color: C.textSecondary,
     textAlign: 'center',
   },
+  createBtn: {
+    marginTop: 8,
+    backgroundColor: C.primary,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 9999,
+  },
+  createBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
   grid: {
-    paddingHorizontal: theme.spacing.lg,
+    paddingHorizontal: 16,
+    paddingTop: 4,
   },
   gridRow: {
     justifyContent: 'space-between',
-    marginBottom: theme.spacing.md,
+    marginBottom: 12,
   },
   gridCard: {
-    width: '48%',
+    width: '48.5%',
+    backgroundColor: C.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 14,
+    gap: 8,
+  },
+  gridEmoji: {
+    fontSize: 30,
+  },
+  gridName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: C.textPrimary,
+    lineHeight: 18,
+    minHeight: 36,
+  },
+  gridMeta: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  gridMetaText: {
+    fontSize: 11,
+    color: C.textSecondary,
+    fontWeight: '500',
+  },
+  joinBtn: {
+    backgroundColor: C.primaryMuted,
+    borderWidth: 1,
+    borderColor: `${C.primary}50`,
+    borderRadius: 8,
+    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 34,
+  },
+  joinBtnLoading: {
+    opacity: 0.6,
+  },
+  joinBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: C.primary,
   },
 });

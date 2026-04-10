@@ -5,142 +5,138 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  FlatList,
   ActivityIndicator,
   Alert,
-  Clipboard,
   StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import Svg, { Circle } from 'react-native-svg';
-import { theme } from '../../constants/theme';
-import { getPillarById } from '../../constants/pillars';
-import { LeaderboardRow } from '../../components/LeaderboardRow';
-import { StakeButton } from '../../components/StakeButton';
-import { PillarIcon } from '../../components/PillarIcon';
-import { useChallenge } from '../../hooks/useChallenge';
+import { useChallenge, useJoinChallenge, getPillarEmoji } from '../../hooks/useChallenge';
 import { useAuth } from '../../hooks/useAuth';
 import { LeaderboardEntry } from '../../lib/supabase';
 
-// ─── Circular Progress Ring (SVG) ────────────────────────────────────────────
-
-interface CircularProgressProps {
-  progress: number; // 0–1
-  size?: number;
-  strokeWidth?: number;
-  color: string;
-  label?: string;
-  currentValue: number;
-  targetValue: number;
-  unit: string;
-}
-
-const CircularProgress: React.FC<CircularProgressProps> = ({
-  progress,
-  size = 160,
-  strokeWidth = 10,
-  color,
-  currentValue,
-  targetValue,
-  unit,
-}) => {
-  const clamp = Math.min(1, Math.max(0, progress));
-  const radius = (size - strokeWidth) / 2;
-  const circumference = 2 * Math.PI * radius;
-  const strokeDashoffset = circumference * (1 - clamp);
-  const cx = size / 2;
-  const cy = size / 2;
-
-  return (
-    <View style={{ alignItems: 'center', justifyContent: 'center', width: size, height: size }}>
-      <Svg width={size} height={size} style={{ position: 'absolute' }}>
-        {/* Track */}
-        <Circle
-          cx={cx}
-          cy={cy}
-          r={radius}
-          stroke={`${color}25`}
-          strokeWidth={strokeWidth}
-          fill="none"
-        />
-        {/* Progress arc */}
-        <Circle
-          cx={cx}
-          cy={cy}
-          r={radius}
-          stroke={color}
-          strokeWidth={strokeWidth}
-          fill="none"
-          strokeLinecap="round"
-          strokeDasharray={`${circumference} ${circumference}`}
-          strokeDashoffset={strokeDashoffset}
-          transform={`rotate(-90 ${cx} ${cy})`}
-        />
-      </Svg>
-
-      {/* Center content */}
-      <View style={{ alignItems: 'center' }}>
-        <Text
-          style={{
-            fontFamily: theme.typography.fontFamily.mono,
-            fontSize: theme.typography.fontSize.xxxl,
-            fontWeight: theme.typography.fontWeight.bold,
-            color: color,
-            lineHeight: 38,
-          }}
-        >
-          {Math.round(clamp * 100)}%
-        </Text>
-        <Text
-          style={{
-            fontFamily: theme.typography.fontFamily.mono,
-            fontSize: theme.typography.fontSize.sm,
-            color: theme.colors.textSecondary,
-            marginTop: 4,
-          }}
-        >
-          {currentValue.toLocaleString()} / {targetValue.toLocaleString()}
-        </Text>
-        <Text
-          style={{
-            fontFamily: theme.typography.fontFamily.ui,
-            fontSize: theme.typography.fontSize.xs,
-            color: theme.colors.textMuted,
-          }}
-        >
-          {unit}
-        </Text>
-      </View>
-    </View>
-  );
+// ─── Design Tokens ────────────────────────────────────────────────────────────
+const C = {
+  bg: '#0A0A0F',
+  primary: '#6C63FF',
+  success: '#00FF87',
+  error: '#FF4757',
+  card: '#0D0D1A',
+  border: '#1A1A2E',
+  textPrimary: '#FFFFFF',
+  textSecondary: '#8888AA',
+  primaryMuted: 'rgba(108,99,255,0.12)',
+  successMuted: 'rgba(0,255,135,0.12)',
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
 function getDaysRemaining(endsAt: string): number {
-  const end = new Date(endsAt).getTime();
-  const now = Date.now();
-  return Math.max(0, Math.ceil((end - now) / (1000 * 60 * 60 * 24)));
+  return Math.max(
+    0,
+    Math.ceil((new Date(endsAt).getTime() - Date.now()) / 86400000)
+  );
 }
 
 function isEnded(endsAt: string): boolean {
   return new Date(endsAt).getTime() < Date.now();
 }
 
-function truncateAddress(addr: string): string {
-  if (!addr || addr.length < 10) return addr;
-  return `${addr.slice(0, 8)}...${addr.slice(-6)}`;
+function getRankMedal(rank: number): string {
+  if (rank === 1) return '🥇';
+  if (rank === 2) return '🥈';
+  if (rank === 3) return '🥉';
+  return `#${rank}`;
 }
 
-// ─── Main Screen ──────────────────────────────────────────────────────────────
+// ─── Linear Progress Bar ──────────────────────────────────────────────────────
+const ProgressBar: React.FC<{
+  progress: number; // 0-1
+  color?: string;
+  height?: number;
+}> = ({ progress, color = C.primary, height = 6 }) => {
+  const pct = Math.min(100, Math.max(0, Math.round(progress * 100)));
+  return (
+    <View style={[styles.progressTrack, { height }]}>
+      <View
+        style={[
+          styles.progressFill,
+          { width: `${pct}%`, backgroundColor: color, height },
+        ]}
+      />
+    </View>
+  );
+};
 
+// ─── Leaderboard Row ─────────────────────────────────────────────────────────
+const LeaderRow: React.FC<{
+  entry: LeaderboardEntry;
+  isCurrentUser: boolean;
+  pillarColor: string;
+}> = ({ entry, isCurrentUser, pillarColor }) => {
+  const progressRatio =
+    entry.target > 0 ? entry.progress / entry.target : 0;
+  const initials = (entry.user?.username ?? 'U').slice(0, 2).toUpperCase();
+
+  return (
+    <View
+      style={[
+        styles.leaderRow,
+        isCurrentUser && styles.leaderRowHighlight,
+      ]}
+    >
+      {/* Rank */}
+      <Text style={styles.leaderRank}>{getRankMedal(entry.rank)}</Text>
+
+      {/* Avatar */}
+      <View
+        style={[
+          styles.leaderAvatar,
+          isCurrentUser && { borderColor: pillarColor },
+        ]}
+      >
+        <Text style={styles.leaderAvatarText}>{initials}</Text>
+      </View>
+
+      {/* Info */}
+      <View style={styles.leaderInfo}>
+        <View style={styles.leaderNameRow}>
+          <Text style={styles.leaderName} numberOfLines={1}>
+            {entry.user?.username ?? 'Anonymous'}
+          </Text>
+          {isCurrentUser && (
+            <Text style={styles.youLabel}>YOU</Text>
+          )}
+          {entry.completed && (
+            <Text style={styles.completedLabel}>✓</Text>
+          )}
+        </View>
+
+        <View style={styles.leaderProgressRow}>
+          <ProgressBar
+            progress={progressRatio}
+            color={entry.completed ? C.success : pillarColor}
+            height={4}
+          />
+          <Text style={styles.leaderProgressText}>
+            {Math.round(progressRatio * 100)}%
+          </Text>
+        </View>
+      </View>
+
+      {/* Stake */}
+      {entry.stake > 0 && (
+        <Text style={styles.leaderStake}>${entry.stake}</Text>
+      )}
+    </View>
+  );
+};
+
+// ─── Challenge Detail Screen ──────────────────────────────────────────────────
 export default function ChallengeDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { user } = useAuth();
-  const [staking, setStaking] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [joining, setJoining] = useState(false);
 
   const {
     challenge,
@@ -151,225 +147,244 @@ export default function ChallengeDetailScreen() {
     refresh,
   } = useChallenge(id ?? '', user?.id);
 
-  const pillar = challenge ? getPillarById(challenge.pillar_id) : null;
+  const joinMutation = useJoinChallenge();
+
+  const pillarEmoji = challenge ? getPillarEmoji(challenge.pillar_id) : '🏆';
+  const pillarColor = C.primary; // could derive from pillar_id if needed
   const ended = challenge ? isEnded(challenge.ends_at) : false;
   const daysLeft = challenge ? getDaysRemaining(challenge.ends_at) : 0;
-  const hasStaked = !!myEntry;
+  const hasJoined = !!myEntry;
   const userProgress = myEntry?.progress ?? 0;
-  const progressRatio = challenge ? userProgress / challenge.goal : 0;
+  const progressRatio = challenge && challenge.goal > 0
+    ? userProgress / challenge.goal
+    : 0;
   const totalWinners = leaderboard.filter((e) => e.completed).length;
 
-  const handleCopyContract = useCallback(() => {
-    if (!challenge?.contract_address) return;
-    Clipboard.setString(challenge.contract_address);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, [challenge?.contract_address]);
-
-  const handleStake = useCallback(async () => {
-    if (!challenge) return;
-    setStaking(true);
+  const handleJoin = useCallback(async () => {
+    if (!user?.id || !challenge) return;
+    setJoining(true);
     try {
-      // TODO: wire up wagmi + USDC approve + contract joinChallenge
-      await new Promise((res) => setTimeout(res, 1500)); // placeholder
-      Alert.alert('Staked!', `You've staked $${challenge.stake_usdc} USDC. Good luck!`);
-      await refresh();
-    } catch (err) {
-      Alert.alert('Stake Failed', 'Could not process your stake. Please try again.');
+      await joinMutation.mutateAsync({
+        challenge_id: challenge.id,
+        user_id: user.id,
+        stake_usdc: challenge.stake_usdc,
+      });
+      Alert.alert('Joined! 🎉', `You've joined "${challenge.name}". Good luck!`);
+      refresh();
+    } catch (err: any) {
+      Alert.alert('Could not join', err?.message ?? 'Try again later.');
     } finally {
-      setStaking(false);
+      setJoining(false);
     }
-  }, [challenge, refresh]);
+  }, [user?.id, challenge, joinMutation, refresh]);
 
-  // ── Loading state
+  // ── Loading ──────────────────────────────────────────────────────────────────
   if (loading) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.centered}>
-          <ActivityIndicator size="large" color={theme.colors.accent} />
+          <ActivityIndicator size="large" color={C.primary} />
+          <Text style={styles.loadingText}>Loading challenge...</Text>
         </View>
       </SafeAreaView>
     );
   }
 
-  // ── Error state
+  // ── Error ─────────────────────────────────────────────────────────────────────
   if (error || !challenge) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+            <Text style={styles.backIcon}>←</Text>
+          </TouchableOpacity>
+        </View>
         <View style={styles.centered}>
           <Text style={styles.errorIcon}>⚠️</Text>
           <Text style={styles.errorText}>
-            {error?.message ?? 'Challenge not found.'}
+            {(error as any)?.message ?? 'Challenge not found.'}
           </Text>
-          <TouchableOpacity style={styles.retryButton} onPress={refresh}>
-            <Text style={styles.retryText}>Try Again</Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={() => refresh()}>
+            <Text style={styles.retryBtnText}>Try Again</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
     );
   }
 
-  // ── Render
+  // ── Render ────────────────────────────────────────────────────────────────────
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <StatusBar barStyle="light-content" />
 
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={styles.backButton}
-          activeOpacity={0.7}
-        >
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <Text style={styles.backIcon}>←</Text>
         </TouchableOpacity>
-
-        <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle} numberOfLines={1}>
-            {challenge.name}
-          </Text>
-        </View>
-
-        {pillar && <PillarIcon pillarId={challenge.pillar_id} size="sm" />}
+        <Text style={styles.headerTitle} numberOfLines={1}>
+          {challenge.name}
+        </Text>
+        <Text style={styles.headerEmoji}>{pillarEmoji}</Text>
       </View>
 
       <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
-        {/* ── Time Remaining Pill ──────────────────────────────────────────── */}
-        <View style={styles.timePillRow}>
-          {ended ? (
-            <View style={[styles.timePill, styles.timePillEnded]}>
-              <Text style={styles.timePillEndedText}>⛔ ENDED</Text>
-            </View>
-          ) : (
-            <View style={[styles.timePill, styles.timePillActive]}>
-              <View style={styles.timePillDot} />
-              <Text style={styles.timePillText}>
-                {daysLeft === 0 ? 'Ending today' : `${daysLeft} day${daysLeft !== 1 ? 's' : ''} left`}
+        {/* ── Hero Section ──────────────────────────────────────────────────── */}
+        <View style={styles.hero}>
+          <Text style={styles.heroEmoji}>{pillarEmoji}</Text>
+          <Text style={styles.heroName}>{challenge.name}</Text>
+
+          {/* Status badge */}
+          <View style={styles.statusRow}>
+            {ended ? (
+              <View style={[styles.statusBadge, styles.statusEnded]}>
+                <Text style={styles.statusEndedText}>⛔ ENDED</Text>
+              </View>
+            ) : (
+              <View style={[styles.statusBadge, styles.statusActive]}>
+                <View style={styles.statusDot} />
+                <Text style={styles.statusActiveText}>
+                  {daysLeft === 0 ? 'Ending today' : `${daysLeft}d remaining`}
+                </Text>
+              </View>
+            )}
+          </View>
+
+          {/* Stats row */}
+          <View style={styles.heroStats}>
+            <View style={styles.heroStat}>
+              <Text style={[styles.heroStatValue, { color: C.success }]}>
+                ${challenge.total_pot_usdc.toLocaleString()}
               </Text>
+              <Text style={styles.heroStatLabel}>Total Pot</Text>
             </View>
-          )}
+            <View style={styles.heroStatDivider} />
+            <View style={styles.heroStat}>
+              <Text style={styles.heroStatValue}>
+                {challenge.participant_count}
+              </Text>
+              <Text style={styles.heroStatLabel}>Players</Text>
+            </View>
+            <View style={styles.heroStatDivider} />
+            <View style={styles.heroStat}>
+              <Text style={styles.heroStatValue}>
+                {challenge.stake_usdc > 0 ? `$${challenge.stake_usdc}` : 'Free'}
+              </Text>
+              <Text style={styles.heroStatLabel}>Entry</Text>
+            </View>
+          </View>
         </View>
 
-        {/* ── Progress Ring ─────────────────────────────────────────────────── */}
-        <View style={styles.progressSection}>
+        {/* ── Your Progress ────────────────────────────────────────────────── */}
+        <View style={styles.section}>
           <Text style={styles.sectionLabel}>YOUR PROGRESS</Text>
-          <CircularProgress
-            progress={progressRatio}
-            size={180}
-            strokeWidth={12}
-            color={pillar?.color ?? theme.colors.accent}
-            currentValue={userProgress}
-            targetValue={challenge.goal}
-            unit={pillar?.unit ?? ''}
-          />
-          {!hasStaked && !ended && (
-            <Text style={styles.progressNote}>
-              Join this challenge to track your progress
-            </Text>
-          )}
-        </View>
-
-        {/* ── Stake Info Bar ───────────────────────────────────────────────── */}
-        <View style={styles.stakeBar}>
-          <View style={styles.stakeBarItem}>
-            <Text style={styles.stakeBarValue}>
-              ${challenge.total_pot_usdc.toLocaleString()}
-            </Text>
-            <Text style={styles.stakeBarLabel}>Total Pot</Text>
-          </View>
-          <View style={styles.stakeBarDivider} />
-          <View style={styles.stakeBarItem}>
-            <Text style={styles.stakeBarValue}>
-              {hasStaked ? `$${myEntry!.stake}` : `$${challenge.stake_usdc}`}
-            </Text>
-            <Text style={styles.stakeBarLabel}>
-              {hasStaked ? 'Your Stake' : 'Entry Fee'}
-            </Text>
-          </View>
-          <View style={styles.stakeBarDivider} />
-          <View style={styles.stakeBarItem}>
-            <Text style={styles.stakeBarValue}>{challenge.participant_count}</Text>
-            <Text style={styles.stakeBarLabel}>Players</Text>
+          <View style={styles.progressCard}>
+            {hasJoined ? (
+              <>
+                <View style={styles.progressHeader}>
+                  <Text style={styles.progressPercent}>
+                    {Math.round(progressRatio * 100)}%
+                  </Text>
+                  <Text style={styles.progressValues}>
+                    {userProgress.toLocaleString()} / {challenge.goal.toLocaleString()}
+                  </Text>
+                </View>
+                <ProgressBar
+                  progress={progressRatio}
+                  color={progressRatio >= 1 ? C.success : C.primary}
+                  height={8}
+                />
+                {progressRatio >= 1 && (
+                  <Text style={styles.completedBanner}>🏆 Goal completed!</Text>
+                )}
+              </>
+            ) : (
+              <View style={styles.notJoinedBox}>
+                <Text style={styles.notJoinedIcon}>👀</Text>
+                <Text style={styles.notJoinedText}>
+                  Join this challenge to track your progress
+                </Text>
+              </View>
+            )}
           </View>
         </View>
 
         {/* ── Leaderboard ──────────────────────────────────────────────────── */}
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>LEADERBOARD</Text>
+
           {leaderboard.length === 0 ? (
             <View style={styles.emptyLeaderboard}>
               <Text style={styles.emptyLeaderboardIcon}>🏆</Text>
-              <Text style={styles.emptyLeaderboardText}>No participants yet.</Text>
-              <Text style={styles.emptyLeaderboardSub}>Be the first to stake!</Text>
+              <Text style={styles.emptyLeaderboardText}>
+                No participants yet. Be the first!
+              </Text>
             </View>
           ) : (
-            <View>
-              {leaderboard.map((entry: LeaderboardEntry) => (
-                <LeaderboardRow
-                  key={entry.user.id}
-                  rank={entry.rank}
-                  user={entry.user}
-                  progress={entry.progress}
-                  target={entry.target}
-                  stake={entry.stake}
-                  isCurrentUser={entry.user.id === user?.id}
-                  unit={pillar?.unit}
+            <View style={styles.leaderboard}>
+              {leaderboard.map((entry) => (
+                <LeaderRow
+                  key={entry.user?.id ?? String(entry.rank)}
+                  entry={entry}
+                  isCurrentUser={entry.user?.id === user?.id}
+                  pillarColor={pillarColor}
                 />
               ))}
             </View>
           )}
         </View>
 
-        {/* ── Stake Button (active + not staked) ───────────────────────────── */}
-        {!ended && !hasStaked && (
-          <View style={styles.stakeCta}>
-            <StakeButton
-              amount={challenge.stake_usdc}
-              onPress={handleStake}
-              loading={staking}
-              style={styles.stakeButton}
-            />
-            <Text style={styles.stakeCtaNote}>
-              Stake USDC to compete. Winners split the pot.
-            </Text>
-          </View>
-        )}
-
-        {/* ── Settlement Status (ended) ─────────────────────────────────────── */}
+        {/* ── Settlement (ended) ───────────────────────────────────────────── */}
         {ended && (
-          <View style={styles.settlementCard}>
-            <Text style={styles.settlementTitle}>Challenge Ended</Text>
-            <Text style={styles.settlementBody}>
-              {totalWinners > 0
-                ? `${totalWinners} winner${totalWinners !== 1 ? 's' : ''} shared the $${challenge.total_pot_usdc} USDC pot.`
-                : 'No winners met the goal. Stakes returned.'}
-            </Text>
-            {myEntry?.completed && (
-              <View style={styles.wonBanner}>
-                <Text style={styles.wonBannerText}>🏆 You won!</Text>
-              </View>
-            )}
+          <View style={styles.section}>
+            <View style={styles.settlementCard}>
+              <Text style={styles.settlementTitle}>Challenge Ended</Text>
+              <Text style={styles.settlementBody}>
+                {totalWinners > 0
+                  ? `${totalWinners} winner${totalWinners !== 1 ? 's' : ''} shared the $${challenge.total_pot_usdc} USDC pot.`
+                  : 'No one met the goal. Stakes returned.'}
+              </Text>
+              {myEntry?.completed && (
+                <View style={styles.wonBanner}>
+                  <Text style={styles.wonBannerText}>🏆 You won!</Text>
+                </View>
+              )}
+            </View>
           </View>
         )}
 
-        {/* ── Smart Contract Address ───────────────────────────────────────── */}
-        {challenge.contract_address && (
-          <View style={styles.contractSection}>
-            <Text style={styles.contractLabel}>Smart Contract</Text>
+        {/* ── Join CTA ─────────────────────────────────────────────────────── */}
+        {!ended && !hasJoined && (
+          <View style={styles.section}>
             <TouchableOpacity
-              onPress={handleCopyContract}
-              activeOpacity={0.7}
-              style={styles.contractRow}
+              style={[styles.joinBtn, joining && styles.joinBtnLoading]}
+              onPress={handleJoin}
+              activeOpacity={0.85}
+              disabled={joining}
             >
-              <Text style={styles.contractIcon}>⬡</Text>
-              <Text style={styles.contractAddress}>
-                {truncateAddress(challenge.contract_address)}
-              </Text>
-              <Text style={[styles.copyLabel, copied && styles.copiedLabel]}>
-                {copied ? '✓ Copied' : '⎘ Copy'}
-              </Text>
+              {joining ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <>
+                  <Text style={styles.joinBtnText}>
+                    {challenge.stake_usdc > 0
+                      ? `Stake $${challenge.stake_usdc} & Join`
+                      : 'Join Challenge'}
+                  </Text>
+                  <Text style={styles.joinBtnSub}>
+                    Winners split the ${challenge.total_pot_usdc + challenge.stake_usdc} pot
+                  </Text>
+                </>
+              )}
             </TouchableOpacity>
-            <Text style={styles.contractNetwork}>Base Mainnet</Text>
+          </View>
+        )}
+
+        {hasJoined && !ended && (
+          <View style={styles.section}>
+            <View style={styles.joinedBanner}>
+              <Text style={styles.joinedBannerText}>✓ You're in this challenge</Text>
+            </View>
           </View>
         )}
 
@@ -380,304 +395,398 @@ export default function ChallengeDetailScreen() {
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: theme.colors.background,
+    backgroundColor: C.bg,
   },
   centered: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: theme.spacing.lg,
-    paddingHorizontal: theme.spacing.xl,
+    gap: 16,
+    paddingHorizontal: 24,
+  },
+  loadingText: {
+    fontSize: 14,
+    color: C.textSecondary,
   },
   errorIcon: {
     fontSize: 40,
   },
   errorText: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.md,
-    color: theme.colors.textSecondary,
+    fontSize: 15,
+    color: C.textSecondary,
     textAlign: 'center',
   },
-  retryButton: {
-    backgroundColor: theme.colors.accentMuted,
-    paddingHorizontal: theme.spacing.xl,
-    paddingVertical: theme.spacing.md,
-    borderRadius: theme.borderRadius.md,
+  retryBtn: {
+    backgroundColor: C.primaryMuted,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: `${theme.colors.accent}40`,
+    borderColor: `${C.primary}40`,
   },
-  retryText: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: theme.typography.fontWeight.semibold,
-    color: theme.colors.accent,
+  retryBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: C.primary,
   },
   // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.md,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
-    gap: theme.spacing.md,
+    borderBottomColor: C.border,
+    gap: 12,
   },
-  backButton: {
-    padding: theme.spacing.sm,
+  backBtn: {
+    padding: 6,
   },
   backIcon: {
     fontSize: 22,
-    color: theme.colors.textPrimary,
-  },
-  headerCenter: {
-    flex: 1,
+    color: C.textPrimary,
   },
   headerTitle: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.lg,
-    fontWeight: theme.typography.fontWeight.bold,
-    color: theme.colors.textPrimary,
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '700',
+    color: C.textPrimary,
+  },
+  headerEmoji: {
+    fontSize: 22,
   },
   scroll: {
     flex: 1,
   },
-  // Time Pill
-  timePillRow: {
+  // Hero
+  hero: {
     alignItems: 'center',
-    paddingTop: theme.spacing.xl,
-    paddingBottom: theme.spacing.md,
+    paddingHorizontal: 20,
+    paddingTop: 28,
+    paddingBottom: 20,
+    gap: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: C.border,
   },
-  timePill: {
+  heroEmoji: {
+    fontSize: 52,
+  },
+  heroName: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: C.textPrimary,
+    textAlign: 'center',
+    lineHeight: 28,
+  },
+  statusRow: {
+    alignItems: 'center',
+  },
+  statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.sm,
-    borderRadius: theme.borderRadius.full,
-    gap: theme.spacing.sm,
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 9999,
     borderWidth: 1,
   },
-  timePillActive: {
-    backgroundColor: `${theme.colors.win}10`,
-    borderColor: `${theme.colors.win}40`,
+  statusActive: {
+    backgroundColor: `${C.success}10`,
+    borderColor: `${C.success}40`,
   },
-  timePillEnded: {
-    backgroundColor: theme.colors.lossMuted,
-    borderColor: `${theme.colors.loss}40`,
+  statusEnded: {
+    backgroundColor: `${C.error}10`,
+    borderColor: `${C.error}40`,
   },
-  timePillDot: {
+  statusDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: theme.colors.win,
+    backgroundColor: C.success,
   },
-  timePillText: {
-    fontFamily: theme.typography.fontFamily.mono,
-    fontSize: theme.typography.fontSize.sm,
-    fontWeight: theme.typography.fontWeight.semibold,
-    color: theme.colors.win,
+  statusActiveText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: C.success,
   },
-  timePillEndedText: {
-    fontFamily: theme.typography.fontFamily.mono,
-    fontSize: theme.typography.fontSize.sm,
-    fontWeight: theme.typography.fontWeight.bold,
-    color: theme.colors.loss,
+  statusEndedText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: C.error,
   },
-  // Progress
-  progressSection: {
-    alignItems: 'center',
-    paddingVertical: theme.spacing.xxl,
-    gap: theme.spacing.lg,
-  },
-  progressNote: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.textMuted,
-    textAlign: 'center',
-  },
-  // Stake Bar
-  stakeBar: {
+  heroStats: {
     flexDirection: 'row',
-    marginHorizontal: theme.spacing.xl,
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.lg,
+    alignItems: 'center',
+    backgroundColor: C.card,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    overflow: 'hidden',
-    marginBottom: theme.spacing.xxl,
-    ...theme.shadows.card,
+    borderColor: C.border,
+    marginTop: 8,
+    width: '100%',
   },
-  stakeBarItem: {
+  heroStat: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: theme.spacing.lg,
-    gap: 4,
+    paddingVertical: 14,
+    gap: 3,
   },
-  stakeBarValue: {
-    fontFamily: theme.typography.fontFamily.mono,
-    fontSize: theme.typography.fontSize.lg,
-    fontWeight: theme.typography.fontWeight.bold,
-    color: theme.colors.textPrimary,
+  heroStatValue: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: C.textPrimary,
   },
-  stakeBarLabel: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
+  heroStatLabel: {
+    fontSize: 11,
+    color: C.textSecondary,
   },
-  stakeBarDivider: {
+  heroStatDivider: {
     width: 1,
-    backgroundColor: theme.colors.border,
-    marginVertical: theme.spacing.md,
+    height: 32,
+    backgroundColor: C.border,
   },
   // Sections
   section: {
-    marginHorizontal: theme.spacing.xl,
-    marginBottom: theme.spacing.xxl,
+    paddingHorizontal: 20,
+    paddingTop: 24,
+    gap: 12,
   },
   sectionLabel: {
-    fontFamily: theme.typography.fontFamily.mono,
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.textMuted,
-    letterSpacing: 2,
-    marginBottom: theme.spacing.md,
+    fontSize: 12,
+    fontWeight: '700',
+    color: C.textSecondary,
+    letterSpacing: 1.2,
+  },
+  // Progress card
+  progressCard: {
+    backgroundColor: C.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 16,
+    gap: 10,
+  },
+  progressHeader: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+  },
+  progressPercent: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: C.primary,
+  },
+  progressValues: {
+    fontSize: 13,
+    color: C.textSecondary,
+  },
+  progressTrack: {
+    backgroundColor: `${C.primary}20`,
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    borderRadius: 4,
+  },
+  completedBanner: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: C.success,
+    textAlign: 'center',
+  },
+  notJoinedBox: {
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+  },
+  notJoinedIcon: {
+    fontSize: 28,
+  },
+  notJoinedText: {
+    fontSize: 13,
+    color: C.textSecondary,
+    textAlign: 'center',
   },
   // Leaderboard
-  emptyLeaderboard: {
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.lg,
+  leaderboard: {
+    backgroundColor: C.card,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderStyle: 'dashed',
-    padding: theme.spacing.xxl,
+    borderColor: C.border,
+    overflow: 'hidden',
+  },
+  leaderRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: theme.spacing.sm,
+    padding: 12,
+    gap: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: C.border,
+  },
+  leaderRowHighlight: {
+    backgroundColor: `${C.primary}08`,
+  },
+  leaderRank: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: C.textSecondary,
+    width: 28,
+    textAlign: 'center',
+  },
+  leaderAvatar: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: C.border,
+    borderWidth: 1.5,
+    borderColor: C.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  leaderAvatarText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: C.textPrimary,
+  },
+  leaderInfo: {
+    flex: 1,
+    gap: 4,
+  },
+  leaderNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  leaderName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: C.textPrimary,
+    flex: 1,
+  },
+  youLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: C.primary,
+    backgroundColor: C.primaryMuted,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  completedLabel: {
+    fontSize: 12,
+    color: C.success,
+    fontWeight: '700',
+  },
+  leaderProgressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  leaderProgressText: {
+    fontSize: 10,
+    color: C.textSecondary,
+    fontWeight: '600',
+    width: 30,
+    textAlign: 'right',
+  },
+  leaderStake: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: C.success,
+  },
+  emptyLeaderboard: {
+    backgroundColor: C.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 28,
+    alignItems: 'center',
+    gap: 8,
   },
   emptyLeaderboardIcon: {
     fontSize: 32,
   },
   emptyLeaderboardText: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: theme.typography.fontWeight.semibold,
-    color: theme.colors.textPrimary,
-  },
-  emptyLeaderboardSub: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.textSecondary,
-  },
-  // Stake CTA
-  stakeCta: {
-    marginHorizontal: theme.spacing.xl,
-    marginBottom: theme.spacing.xxl,
-    gap: theme.spacing.md,
-  },
-  stakeButton: {
-    width: '100%',
-  },
-  stakeCtaNote: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.textMuted,
+    fontSize: 14,
+    color: C.textSecondary,
     textAlign: 'center',
   },
   // Settlement
   settlementCard: {
-    marginHorizontal: theme.spacing.xl,
-    marginBottom: theme.spacing.xxl,
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.lg,
+    backgroundColor: C.card,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    padding: theme.spacing.xl,
-    gap: theme.spacing.md,
+    borderColor: C.border,
+    padding: 20,
+    gap: 8,
+    alignItems: 'center',
   },
   settlementTitle: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.lg,
-    fontWeight: theme.typography.fontWeight.bold,
-    color: theme.colors.textPrimary,
+    fontSize: 16,
+    fontWeight: '700',
+    color: C.textPrimary,
   },
   settlementBody: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.md,
-    color: theme.colors.textSecondary,
-    lineHeight: 22,
+    fontSize: 14,
+    color: C.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
   },
   wonBanner: {
-    backgroundColor: theme.colors.winMuted,
-    borderRadius: theme.borderRadius.md,
-    paddingVertical: theme.spacing.md,
-    paddingHorizontal: theme.spacing.lg,
+    backgroundColor: `${C.success}15`,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: `${theme.colors.win}40`,
-    ...theme.shadows.win,
+    borderColor: `${C.success}40`,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    marginTop: 4,
   },
   wonBannerText: {
-    fontFamily: theme.typography.fontFamily.mono,
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: theme.typography.fontWeight.bold,
-    color: theme.colors.win,
-    textAlign: 'center',
+    fontSize: 16,
+    fontWeight: '700',
+    color: C.success,
   },
-  // Contract
-  contractSection: {
-    marginHorizontal: theme.spacing.xl,
-    marginBottom: theme.spacing.xxl,
-    gap: theme.spacing.sm,
-  },
-  contractLabel: {
-    fontFamily: theme.typography.fontFamily.mono,
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.textMuted,
-    letterSpacing: 2,
-    textTransform: 'uppercase',
-  },
-  contractRow: {
-    flexDirection: 'row',
+  // Join CTA
+  joinBtn: {
+    backgroundColor: C.primary,
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
     alignItems: 'center',
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.md,
+    gap: 4,
+    minHeight: 58,
+    justifyContent: 'center',
+    shadowColor: C.primary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  joinBtnLoading: {
+    opacity: 0.7,
+  },
+  joinBtnText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  joinBtnSub: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.7)',
+  },
+  joinedBanner: {
+    backgroundColor: `${C.success}12`,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.md,
-    gap: theme.spacing.sm,
+    borderColor: `${C.success}40`,
+    paddingVertical: 14,
+    alignItems: 'center',
   },
-  contractIcon: {
+  joinedBannerText: {
     fontSize: 14,
-    color: theme.colors.usdc,
-  },
-  contractAddress: {
-    flex: 1,
-    fontFamily: theme.typography.fontFamily.mono,
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.textPrimary,
-    letterSpacing: 0.3,
-  },
-  copyLabel: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.accent,
-    fontWeight: theme.typography.fontWeight.medium,
-    backgroundColor: theme.colors.accentMuted,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 3,
-    borderRadius: theme.borderRadius.sm,
-  },
-  copiedLabel: {
-    color: theme.colors.win,
-    backgroundColor: theme.colors.winMuted,
-  },
-  contractNetwork: {
-    fontFamily: theme.typography.fontFamily.ui,
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.textMuted,
-    textAlign: 'right',
+    fontWeight: '600',
+    color: C.success,
   },
 });

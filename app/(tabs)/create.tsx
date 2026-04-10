@@ -14,151 +14,156 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { theme } from '../../constants/theme';
-import { PILLARS, getPillarById } from '../../constants/pillars';
-import { PillarIcon } from '../../components/PillarIcon';
-import { StakeButton } from '../../components/StakeButton';
-import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
-import { useWallet } from '../../hooks/useWallet';
+import { useCreateChallenge } from '../../hooks/useChallenge';
 
-type Step = 1 | 2 | 3 | 4 | 5;
+// ─── Design Tokens ────────────────────────────────────────────────────────────
+const C = {
+  bg: '#0A0A0F',
+  primary: '#6C63FF',
+  success: '#00FF87',
+  error: '#FF4757',
+  card: '#0D0D1A',
+  border: '#1A1A2E',
+  textPrimary: '#FFFFFF',
+  textSecondary: '#8888AA',
+  primaryMuted: 'rgba(108,99,255,0.12)',
+  successMuted: 'rgba(0,255,135,0.12)',
+};
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+type Pillar = 'run' | 'fast' | 'sleep' | 'meditate';
 type Privacy = 'public' | 'friends' | 'private';
-type Duration = 7 | 14 | 21 | 30 | 'custom';
 
-const DURATION_OPTIONS: { value: Duration; label: string }[] = [
-  { value: 7, label: '7 days' },
-  { value: 14, label: '14 days' },
-  { value: 21, label: '21 days' },
-  { value: 30, label: '30 days' },
-  { value: 'custom', label: 'Custom' },
+interface PillarOption {
+  id: Pillar;
+  label: string;
+  emoji: string;
+  description: string;
+  color: string;
+  defaultGoal: number;
+  unit: string;
+}
+
+const PILLAR_OPTIONS: PillarOption[] = [
+  {
+    id: 'run',
+    label: 'Run',
+    emoji: '🏃',
+    description: 'Track total kilometers run',
+    color: '#FF6B35',
+    defaultGoal: 50,
+    unit: 'km',
+  },
+  {
+    id: 'fast',
+    label: 'Fast',
+    emoji: '⚡',
+    description: 'Track fasting hours',
+    color: '#EC4899',
+    defaultGoal: 112,
+    unit: 'hrs',
+  },
+  {
+    id: 'sleep',
+    label: 'Sleep',
+    emoji: '🌙',
+    description: 'Average nightly sleep score',
+    color: '#6C63FF',
+    defaultGoal: 85,
+    unit: 'score',
+  },
+  {
+    id: 'meditate',
+    label: 'Meditate',
+    emoji: '🧘',
+    description: 'Total mindful minutes',
+    color: '#8B5CF6',
+    defaultGoal: 300,
+    unit: 'min',
+  },
 ];
+
+const DURATION_OPTIONS = [7, 14, 30, 60] as const;
+type Duration = typeof DURATION_OPTIONS[number] | number;
+
+const STAKE_PRESETS = [5, 10, 25, 50] as const;
 
 const PRIVACY_OPTIONS: { value: Privacy; label: string; icon: string; desc: string }[] = [
   { value: 'public', label: 'Public', icon: '🌍', desc: 'Anyone can discover and join' },
-  { value: 'friends', label: 'Friends Only', icon: '👥', desc: 'Only your followers can join' },
-  { value: 'private', label: 'Private Link', icon: '🔒', desc: 'Invite only via shared link' },
+  { value: 'friends', label: 'Friends', icon: '👥', desc: 'Only your followers can join' },
+  { value: 'private', label: 'Private', icon: '🔒', desc: 'Invite only via shared link' },
 ];
 
-const STAKE_PRESETS = [0, 5, 10, 25, 50, 100];
-
+// ─── Create Screen ────────────────────────────────────────────────────────────
 export default function CreateScreen() {
   const router = useRouter();
   const { user } = useAuth();
-  const { isConnected } = useWallet();
+  const createChallenge = useCreateChallenge();
 
-  const [step, setStep] = useState<Step>(1);
-  const [selectedPillar, setSelectedPillar] = useState<string | null>(null);
-  const [goal, setGoal] = useState<string>('');
+  const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
+  const [selectedPillar, setSelectedPillar] = useState<PillarOption | null>(null);
+  const [challengeName, setChallengeName] = useState('');
+  const [goalDescription, setGoalDescription] = useState('');
   const [duration, setDuration] = useState<Duration>(30);
   const [customDuration, setCustomDuration] = useState('');
-  const [stake, setStake] = useState<number>(0);
-  const [customStake, setCustomStake] = useState('');
   const [privacy, setPrivacy] = useState<Privacy>('public');
-  const [challengeName, setChallengeName] = useState('');
-  const [deploying, setDeploying] = useState(false);
+  const [stake, setStake] = useState<number>(10);
+  const [customStake, setCustomStake] = useState('');
+  const [useCustomStake, setUseCustomStake] = useState(false);
 
-  const pillar = selectedPillar ? getPillarById(selectedPillar) : null;
+  const effectiveDuration = duration === 0 && customDuration
+    ? parseInt(customDuration, 10) || 0
+    : duration;
 
-  const effectiveDuration = useMemo(() => {
-    if (duration === 'custom') return parseInt(customDuration, 10) || 0;
-    return duration;
-  }, [duration, customDuration]);
+  const effectiveStake = useCustomStake
+    ? parseFloat(customStake) || 0
+    : stake;
 
-  const effectiveStake = useMemo(() => {
-    if (stake === -1) return parseFloat(customStake) || 0;
-    return stake;
-  }, [stake, customStake]);
+  const autoName = selectedPillar
+    ? `${effectiveDuration}d ${selectedPillar.label} Challenge`
+    : '';
+
+  const finalName = challengeName.trim() || autoName;
 
   const canProceed = useMemo(() => {
     switch (step) {
       case 1: return !!selectedPillar;
-      case 2: return parseFloat(goal) > 0;
-      case 3: return effectiveDuration >= 1 && effectiveDuration <= 365;
-      case 4: return effectiveStake >= 0;
-      case 5: return true;
-      default: return false;
+      case 2: return finalName.length > 0 && effectiveDuration >= 1;
+      case 3: return effectiveStake >= 0;
+      case 4: return true;
     }
-  }, [step, selectedPillar, goal, effectiveDuration, effectiveStake]);
-
-  const autoName = useMemo(() => {
-    if (!pillar || !goal) return '';
-    const dur = effectiveDuration > 0 ? `${effectiveDuration}-Day` : '';
-    return `${dur} ${pillar.name} Challenge: ${goal} ${pillar.unit}`.trim();
-  }, [pillar, goal, effectiveDuration]);
+  }, [step, selectedPillar, finalName, effectiveDuration, effectiveStake]);
 
   const handleNext = () => {
-    if (step < 5) setStep((s) => (s + 1) as Step);
+    if (step < 4) setStep((s) => (s + 1) as 1 | 2 | 3 | 4);
   };
 
   const handleBack = () => {
-    if (step > 1) setStep((s) => (s - 1) as Step);
+    if (step > 1) setStep((s) => (s - 1) as 1 | 2 | 3 | 4);
     else router.back();
   };
 
   const handleDeploy = useCallback(async () => {
-    if (!user?.id || !selectedPillar || !pillar) return;
+    if (!user?.id || !selectedPillar) return;
 
-    if (effectiveStake > 0 && !isConnected) {
-      Alert.alert('Wallet Required', 'Connect your Coinbase Wallet to stake USDC.', [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Connect', onPress: () => router.push('/(auth)/login') },
-      ]);
-      return;
-    }
-
-    setDeploying(true);
     try {
-      const startsAt = new Date();
-      const endsAt = new Date();
-      endsAt.setDate(endsAt.getDate() + effectiveDuration);
-
-      const { data, error } = await supabase.from('challenges').insert({
+      const result = await createChallenge.mutateAsync({
         creator_id: user.id,
-        name: challengeName || autoName,
-        pillar_id: selectedPillar,
-        goal: parseFloat(goal),
+        name: finalName,
+        pillar_id: selectedPillar.id,
+        goal: selectedPillar.defaultGoal,
         duration_days: effectiveDuration,
         stake_usdc: effectiveStake,
         privacy,
-        total_pot_usdc: effectiveStake,
-        participant_count: 1,
-        starts_at: startsAt.toISOString(),
-        ends_at: endsAt.toISOString(),
-        status: 'active',
-      }).select().single();
-
-      if (error) throw error;
-
-      // Auto-join as creator
-      await supabase.from('challenge_participants').insert({
-        challenge_id: data.id,
-        user_id: user.id,
-        progress: 0,
-        stake_usdc: effectiveStake,
-        completed: false,
-        rank: 1,
       });
-
-      router.push(`/challenge/${data.id}`);
+      router.push(`/challenge/${result.id}`);
     } catch (err: any) {
-      Alert.alert('Failed to Deploy', err.message ?? 'Something went wrong. Try again.');
-    } finally {
-      setDeploying(false);
+      Alert.alert('Deploy Failed', err?.message ?? 'Something went wrong. Try again.');
     }
-  }, [
-    user?.id,
-    selectedPillar,
-    pillar,
-    goal,
-    effectiveDuration,
-    effectiveStake,
-    privacy,
-    challengeName,
-    autoName,
-    isConnected,
-    router,
-  ]);
+  }, [user?.id, selectedPillar, finalName, effectiveDuration, effectiveStake, privacy, createChallenge, router]);
+
+  const pillarColor = selectedPillar?.color ?? C.primary;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -169,18 +174,23 @@ export default function CreateScreen() {
       >
         {/* Header */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={handleBack} style={styles.backButton}>
+          <TouchableOpacity onPress={handleBack} style={styles.backBtn}>
             <Text style={styles.backIcon}>←</Text>
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Create Challenge</Text>
-          <View style={styles.stepIndicator}>
-            <Text style={styles.stepText}>{step}/5</Text>
+          <View style={styles.stepBadge}>
+            <Text style={styles.stepText}>{step}/4</Text>
           </View>
         </View>
 
-        {/* Step progress bar */}
+        {/* Progress bar */}
         <View style={styles.progressBar}>
-          <View style={[styles.progressFill, { width: `${(step / 5) * 100}%` }]} />
+          <View
+            style={[
+              styles.progressFill,
+              { width: `${(step / 4) * 100}%`, backgroundColor: pillarColor },
+            ]}
+          />
         </View>
 
         <ScrollView
@@ -188,179 +198,176 @@ export default function CreateScreen() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Step 1: Choose Pillar */}
+          {/* ── Step 1: Pick Pillar ──────────────────────────────────────────── */}
           {step === 1 && (
             <View style={styles.stepContent}>
               <Text style={styles.stepTitle}>Choose your challenge type</Text>
               <Text style={styles.stepSubtitle}>What will participants track?</Text>
 
               <View style={styles.pillarGrid}>
-                {PILLARS.map((p) => (
-                  <TouchableOpacity
-                    key={p.id}
-                    onPress={() => setSelectedPillar(p.id)}
-                    activeOpacity={0.75}
-                    style={[
-                      styles.pillarCell,
-                      selectedPillar === p.id && {
-                        borderColor: p.color,
-                        backgroundColor: p.accentColor,
-                      },
-                    ]}
-                  >
-                    <Text style={styles.pillarCellIcon}>{p.icon}</Text>
-                    <Text
+                {PILLAR_OPTIONS.map((p) => {
+                  const isSelected = selectedPillar?.id === p.id;
+                  return (
+                    <TouchableOpacity
+                      key={p.id}
                       style={[
-                        styles.pillarCellName,
-                        selectedPillar === p.id && { color: p.color },
+                        styles.pillarCard,
+                        isSelected && {
+                          borderColor: p.color,
+                          backgroundColor: `${p.color}15`,
+                        },
                       ]}
+                      onPress={() => setSelectedPillar(p)}
+                      activeOpacity={0.8}
                     >
-                      {p.name}
-                    </Text>
-                    <Text style={styles.pillarCellUnit}>{p.unit}</Text>
-                    {selectedPillar === p.id && (
-                      <View style={[styles.pillarCheck, { backgroundColor: p.color }]}>
-                        <Text style={styles.pillarCheckText}>✓</Text>
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                ))}
+                      {isSelected && (
+                        <View style={[styles.pillarCheck, { backgroundColor: p.color }]}>
+                          <Text style={styles.pillarCheckText}>✓</Text>
+                        </View>
+                      )}
+                      <Text style={styles.pillarEmoji}>{p.emoji}</Text>
+                      <Text style={[styles.pillarLabel, isSelected && { color: p.color }]}>
+                        {p.label}
+                      </Text>
+                      <Text style={styles.pillarDesc}>{p.description}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
-
-              {pillar && (
-                <View style={[styles.pillarInfoCard, { borderColor: pillar.color + '40' }]}>
-                  <Text style={[styles.pillarInfoTitle, { color: pillar.color }]}>
-                    {pillar.icon} {pillar.name}
-                  </Text>
-                  <Text style={styles.pillarInfoDesc}>{pillar.description}</Text>
-                  <Text style={styles.pillarInfoSource}>
-                    Data via: {pillar.dataSource.join(', ')}
-                  </Text>
-                </View>
-              )}
             </View>
           )}
 
-          {/* Step 2: Set Goal */}
-          {step === 2 && pillar && (
+          {/* ── Step 2: Name, Goal Description, Duration, Privacy ─────────── */}
+          {step === 2 && (
             <View style={styles.stepContent}>
-              <Text style={styles.stepTitle}>Set the target</Text>
-              <Text style={styles.stepSubtitle}>
-                What's the goal participants must hit?
-              </Text>
+              <Text style={styles.stepTitle}>Configure your challenge</Text>
+              <Text style={styles.stepSubtitle}>Set the details</Text>
 
-              <View style={styles.goalInputContainer}>
-                <Text style={styles.goalPillarIcon}>{pillar.icon}</Text>
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Challenge Name</Text>
                 <TextInput
-                  style={styles.goalInput}
-                  value={goal}
-                  onChangeText={setGoal}
-                  placeholder={pillar.goalDefault.toString()}
-                  placeholderTextColor={theme.colors.textMuted}
-                  keyboardType="numeric"
-                  returnKeyType="done"
-                  autoFocus
-                />
-                <Text style={styles.goalUnit}>{pillar.unit}</Text>
-              </View>
-
-              <Text style={styles.goalHint}>
-                Suggested: {pillar.goalDefault} {pillar.unit} · Range: {pillar.goalMin}–{pillar.goalMax}
-              </Text>
-
-              {/* Quick presets */}
-              <View style={styles.presets}>
-                {[pillar.goalMin, pillar.goalDefault, Math.round(pillar.goalMax * 0.5), pillar.goalMax].map((v) => (
-                  <TouchableOpacity
-                    key={v}
-                    onPress={() => setGoal(v.toString())}
-                    style={[
-                      styles.preset,
-                      goal === v.toString() && styles.presetActive,
-                    ]}
-                  >
-                    <Text style={[styles.presetText, goal === v.toString() && styles.presetTextActive]}>
-                      {v}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              {/* Name override */}
-              <View style={styles.nameSection}>
-                <Text style={styles.nameLabel}>Challenge name (optional)</Text>
-                <TextInput
-                  style={styles.nameInput}
+                  style={styles.textInput}
                   value={challengeName}
                   onChangeText={setChallengeName}
-                  placeholder={autoName || 'Auto-generated from your settings'}
-                  placeholderTextColor={theme.colors.textMuted}
-                  returnKeyType="done"
+                  placeholder={autoName || 'e.g. 30-Day Run Challenge'}
+                  placeholderTextColor={C.textSecondary}
+                  returnKeyType="next"
                   maxLength={80}
                 />
+                {autoName && !challengeName && (
+                  <Text style={styles.fieldHint}>Auto: "{autoName}"</Text>
+                )}
               </View>
-            </View>
-          )}
 
-          {/* Step 3: Duration */}
-          {step === 3 && (
-            <View style={styles.stepContent}>
-              <Text style={styles.stepTitle}>Set the duration</Text>
-              <Text style={styles.stepSubtitle}>How many days does this challenge run?</Text>
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Goal Description</Text>
+                <TextInput
+                  style={[styles.textInput, styles.textArea]}
+                  value={goalDescription}
+                  onChangeText={setGoalDescription}
+                  placeholder="Describe what participants must achieve..."
+                  placeholderTextColor={C.textSecondary}
+                  multiline
+                  numberOfLines={3}
+                  textAlignVertical="top"
+                  maxLength={200}
+                />
+              </View>
 
-              <View style={styles.durationGrid}>
-                {DURATION_OPTIONS.map((opt) => (
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Duration</Text>
+                <View style={styles.durationGrid}>
+                  {DURATION_OPTIONS.map((d) => (
+                    <TouchableOpacity
+                      key={d}
+                      style={[
+                        styles.durationChip,
+                        duration === d && styles.durationChipActive,
+                      ]}
+                      onPress={() => { setDuration(d); setCustomDuration(''); }}
+                    >
+                      <Text
+                        style={[
+                          styles.durationChipText,
+                          duration === d && styles.durationChipTextActive,
+                        ]}
+                      >
+                        {d}d
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
                   <TouchableOpacity
-                    key={opt.value}
-                    onPress={() => setDuration(opt.value)}
                     style={[
-                      styles.durationOption,
-                      duration === opt.value && styles.durationOptionActive,
+                      styles.durationChip,
+                      duration === 0 && styles.durationChipActive,
                     ]}
+                    onPress={() => setDuration(0)}
                   >
                     <Text
                       style={[
-                        styles.durationLabel,
-                        duration === opt.value && styles.durationLabelActive,
+                        styles.durationChipText,
+                        duration === 0 && styles.durationChipTextActive,
                       ]}
                     >
-                      {opt.label}
+                      Custom
                     </Text>
                   </TouchableOpacity>
-                ))}
-              </View>
+                </View>
 
-              {duration === 'custom' && (
-                <View style={styles.customDurationInput}>
+                {duration === 0 && (
                   <TextInput
-                    style={styles.goalInput}
+                    style={[styles.textInput, { marginTop: 8 }]}
                     value={customDuration}
                     onChangeText={setCustomDuration}
                     placeholder="Enter days (1–365)"
-                    placeholderTextColor={theme.colors.textMuted}
+                    placeholderTextColor={C.textSecondary}
                     keyboardType="numeric"
-                    autoFocus
                     returnKeyType="done"
+                    autoFocus
                   />
-                  <Text style={styles.goalUnit}>days</Text>
-                </View>
-              )}
+                )}
+              </View>
 
-              {effectiveDuration > 0 && (
-                <View style={styles.durationSummary}>
-                  <Text style={styles.durationSummaryText}>
-                    Challenge runs {effectiveDuration} day{effectiveDuration !== 1 ? 's' : ''}
-                  </Text>
-                  <Text style={styles.durationSummarySubtext}>
-                    Ends {formatEndDate(effectiveDuration)}
-                  </Text>
-                </View>
-              )}
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Privacy</Text>
+                {PRIVACY_OPTIONS.map((opt) => (
+                  <TouchableOpacity
+                    key={opt.value}
+                    style={[
+                      styles.privacyRow,
+                      privacy === opt.value && styles.privacyRowActive,
+                    ]}
+                    onPress={() => setPrivacy(opt.value)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.privacyIcon}>{opt.icon}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text
+                        style={[
+                          styles.privacyLabel,
+                          privacy === opt.value && { color: C.primary },
+                        ]}
+                      >
+                        {opt.label}
+                      </Text>
+                      <Text style={styles.privacyDesc}>{opt.desc}</Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.radioOuter,
+                        privacy === opt.value && styles.radioOuterActive,
+                      ]}
+                    >
+                      {privacy === opt.value && <View style={styles.radioInner} />}
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
           )}
 
-          {/* Step 4: Stake */}
-          {step === 4 && (
+          {/* ── Step 3: Stake Amount ─────────────────────────────────────────── */}
+          {step === 3 && (
             <View style={styles.stepContent}>
               <Text style={styles.stepTitle}>Stake amount</Text>
               <Text style={styles.stepSubtitle}>
@@ -371,287 +378,260 @@ export default function CreateScreen() {
                 {STAKE_PRESETS.map((amount) => (
                   <TouchableOpacity
                     key={amount}
-                    onPress={() => { setStake(amount); setCustomStake(''); }}
                     style={[
-                      styles.stakeOption,
-                      stake === amount && amount === 0 && styles.stakeOptionFree,
-                      stake === amount && amount > 0 && styles.stakeOptionActive,
+                      styles.stakeChip,
+                      !useCustomStake && stake === amount && styles.stakeChipActive,
                     ]}
+                    onPress={() => { setStake(amount); setUseCustomStake(false); }}
+                    activeOpacity={0.8}
                   >
                     <Text
                       style={[
-                        styles.stakeAmount,
-                        stake === amount && amount > 0 && styles.stakeAmountActive,
-                        stake === amount && amount === 0 && styles.stakeAmountFree,
+                        styles.stakeChipText,
+                        !useCustomStake && stake === amount && styles.stakeChipTextActive,
                       ]}
                     >
-                      {amount === 0 ? 'Free' : `$${amount}`}
+                      ${amount}
                     </Text>
-                    {amount === 0 && (
-                      <Text style={styles.stakeDesc}>Reputation only</Text>
-                    )}
                   </TouchableOpacity>
                 ))}
 
-                {/* Custom stake */}
-                <View style={[styles.stakeOption, stake === -1 && styles.stakeOptionActive, { width: '100%' }]}>
-                  <Text style={styles.stakeAmount}>Custom</Text>
-                  <TextInput
-                    style={styles.customStakeInput}
-                    value={customStake}
-                    onChangeText={(t) => { setCustomStake(t); setStake(-1); }}
-                    placeholder="Enter USDC amount"
-                    placeholderTextColor={theme.colors.textMuted}
-                    keyboardType="numeric"
-                    returnKeyType="done"
-                  />
-                </View>
+                <TouchableOpacity
+                  style={[styles.stakeChip, { width: '100%' }, useCustomStake && styles.stakeChipActive]}
+                  onPress={() => setUseCustomStake(true)}
+                >
+                  <Text style={[styles.stakeChipText, useCustomStake && styles.stakeChipTextActive]}>
+                    Custom
+                  </Text>
+                </TouchableOpacity>
               </View>
+
+              {useCustomStake && (
+                <TextInput
+                  style={[styles.textInput, { marginTop: 12 }]}
+                  value={customStake}
+                  onChangeText={setCustomStake}
+                  placeholder="Enter USDC amount"
+                  placeholderTextColor={C.textSecondary}
+                  keyboardType="numeric"
+                  returnKeyType="done"
+                  autoFocus
+                />
+              )}
 
               {effectiveStake > 0 && (
                 <View style={styles.potPreview}>
                   <Text style={styles.potPreviewLabel}>Estimated pot (10 players)</Text>
-                  <Text style={styles.potPreviewAmount}>
-                    ${effectiveStake * 10} USDC
-                  </Text>
+                  <Text style={styles.potPreviewAmount}>${effectiveStake * 10} USDC</Text>
                   <Text style={styles.potPreviewWinner}>
                     Winner takes ~${Math.round(effectiveStake * 10 * 0.9)}
                   </Text>
                 </View>
               )}
+
+              <View style={styles.freeOption}>
+                <TouchableOpacity
+                  style={styles.freeBtn}
+                  onPress={() => { setStake(0); setUseCustomStake(false); }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.freeBtnText}>
+                    {!useCustomStake && stake === 0 ? '✓ ' : ''}No stake (free / reputation only)
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
           )}
 
-          {/* Step 5: Privacy */}
-          {step === 5 && (
+          {/* ── Step 4: Confirm + Deploy ─────────────────────────────────────── */}
+          {step === 4 && selectedPillar && (
             <View style={styles.stepContent}>
-              <Text style={styles.stepTitle}>Who can join?</Text>
-              <Text style={styles.stepSubtitle}>Control access to your challenge</Text>
+              <Text style={styles.stepTitle}>Review & Deploy</Text>
+              <Text style={styles.stepSubtitle}>Confirm your challenge details</Text>
 
-              <View style={styles.privacyOptions}>
-                {PRIVACY_OPTIONS.map((opt) => (
-                  <TouchableOpacity
-                    key={opt.value}
-                    onPress={() => setPrivacy(opt.value)}
-                    style={[
-                      styles.privacyOption,
-                      privacy === opt.value && styles.privacyOptionActive,
-                    ]}
-                  >
-                    <View style={styles.privacyLeft}>
-                      <Text style={styles.privacyIcon}>{opt.icon}</Text>
-                      <View>
-                        <Text style={[
-                          styles.privacyLabel,
-                          privacy === opt.value && styles.privacyLabelActive,
-                        ]}>
-                          {opt.label}
+              <View style={[styles.confirmCard, { borderColor: `${pillarColor}40` }]}>
+                {/* Pillar hero */}
+                <View style={[styles.confirmHero, { backgroundColor: `${pillarColor}15` }]}>
+                  <Text style={styles.confirmEmoji}>{selectedPillar.emoji}</Text>
+                  <View>
+                    <Text style={[styles.confirmPillar, { color: pillarColor }]}>
+                      {selectedPillar.label.toUpperCase()}
+                    </Text>
+                    <Text style={styles.confirmName} numberOfLines={2}>{finalName}</Text>
+                  </View>
+                </View>
+
+                {/* Details */}
+                <View style={styles.confirmDetails}>
+                  <View style={styles.confirmRow}>
+                    <Text style={styles.confirmRowLabel}>Duration</Text>
+                    <Text style={styles.confirmRowValue}>
+                      {effectiveDuration} day{effectiveDuration !== 1 ? 's' : ''}
+                    </Text>
+                  </View>
+                  <View style={styles.confirmDivider} />
+                  <View style={styles.confirmRow}>
+                    <Text style={styles.confirmRowLabel}>Stake</Text>
+                    <Text style={[styles.confirmRowValue, effectiveStake > 0 && { color: C.success }]}>
+                      {effectiveStake > 0 ? `$${effectiveStake} USDC` : 'Free'}
+                    </Text>
+                  </View>
+                  <View style={styles.confirmDivider} />
+                  <View style={styles.confirmRow}>
+                    <Text style={styles.confirmRowLabel}>Privacy</Text>
+                    <Text style={styles.confirmRowValue}>{privacy}</Text>
+                  </View>
+                  {goalDescription.trim().length > 0 && (
+                    <>
+                      <View style={styles.confirmDivider} />
+                      <View style={styles.confirmRow}>
+                        <Text style={styles.confirmRowLabel}>Goal</Text>
+                        <Text style={[styles.confirmRowValue, { flex: 1, textAlign: 'right' }]} numberOfLines={2}>
+                          {goalDescription}
                         </Text>
-                        <Text style={styles.privacyDesc}>{opt.desc}</Text>
                       </View>
-                    </View>
-                    <View style={[
-                      styles.radioOuter,
-                      privacy === opt.value && styles.radioOuterActive,
-                    ]}>
-                      {privacy === opt.value && <View style={styles.radioInner} />}
-                    </View>
-                  </TouchableOpacity>
-                ))}
+                    </>
+                  )}
+                </View>
               </View>
+
+              <TouchableOpacity
+                style={[
+                  styles.deployBtn,
+                  { backgroundColor: pillarColor },
+                  createChallenge.isPending && styles.deployBtnLoading,
+                ]}
+                onPress={handleDeploy}
+                activeOpacity={0.85}
+                disabled={createChallenge.isPending}
+              >
+                {createChallenge.isPending ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.deployBtnText}>🚀 Deploy Challenge</Text>
+                )}
+              </TouchableOpacity>
+
+              <Text style={styles.deployNote}>
+                You'll be added as the first participant automatically.
+              </Text>
             </View>
           )}
 
-          {/* Live preview card */}
-          {selectedPillar && (
-            <View style={styles.previewSection}>
-              <Text style={styles.previewLabel}>Preview</Text>
-              <View style={[styles.previewCard, { borderColor: (pillar?.color ?? theme.colors.accent) + '40' }]}>
-                <View style={styles.previewHeader}>
-                  <Text style={styles.previewPillarIcon}>{pillar?.icon}</Text>
-                  <View style={styles.previewHeaderRight}>
-                    <Text style={styles.previewName} numberOfLines={2}>
-                      {challengeName || autoName || `${pillar?.name} Challenge`}
-                    </Text>
-                    <Text style={[styles.previewPillar, { color: pillar?.color }]}>
-                      {pillar?.name}
-                    </Text>
-                  </View>
-                </View>
-                <View style={styles.previewStats}>
-                  <View style={styles.previewStat}>
-                    <Text style={styles.previewStatValue}>
-                      {goal || '—'} {pillar?.unit}
-                    </Text>
-                    <Text style={styles.previewStatLabel}>Goal</Text>
-                  </View>
-                  <View style={styles.previewStat}>
-                    <Text style={styles.previewStatValue}>
-                      {effectiveDuration > 0 ? `${effectiveDuration}d` : '—'}
-                    </Text>
-                    <Text style={styles.previewStatLabel}>Duration</Text>
-                  </View>
-                  <View style={styles.previewStat}>
-                    <Text style={[
-                      styles.previewStatValue,
-                      effectiveStake > 0 ? styles.stakeValueGreen : styles.stakeValueGray,
-                    ]}>
-                      {effectiveStake > 0 ? `$${effectiveStake}` : 'Free'}
-                    </Text>
-                    <Text style={styles.previewStatLabel}>Stake</Text>
-                  </View>
-                  <View style={styles.previewStat}>
-                    <Text style={styles.previewStatValue}>
-                      {privacy === 'public' ? '🌍' : privacy === 'friends' ? '👥' : '🔒'}
-                    </Text>
-                    <Text style={styles.previewStatLabel}>Access</Text>
-                  </View>
-                </View>
-              </View>
-            </View>
-          )}
-
-          <View style={{ height: 160 }} />
+          <View style={{ height: 120 }} />
         </ScrollView>
 
-        {/* Bottom action */}
-        <View style={styles.bottomBar}>
-          {step < 5 ? (
+        {/* Bottom CTA */}
+        {step < 4 && (
+          <View style={styles.bottomBar}>
             <TouchableOpacity
+              style={[
+                styles.nextBtn,
+                { backgroundColor: pillarColor },
+                !canProceed && styles.nextBtnDisabled,
+              ]}
               onPress={handleNext}
+              activeOpacity={0.85}
               disabled={!canProceed}
-              style={[styles.nextButton, !canProceed && styles.nextButtonDisabled]}
-              activeOpacity={0.8}
             >
-              <Text style={styles.nextButtonText}>
-                Continue → Step {step + 1} of 5
+              <Text style={styles.nextBtnText}>
+                {step === 3 ? 'Review →' : 'Continue →'}
               </Text>
             </TouchableOpacity>
-          ) : (
-            <StakeButton
-              amount={effectiveStake}
-              onPress={handleDeploy}
-              loading={deploying}
-              label={deploying ? 'Deploying...' : `Deploy Challenge${effectiveStake > 0 ? ` · $${effectiveStake} USDC` : ''}`}
-              style={styles.deployButton}
-            />
-          )}
-        </View>
+          </View>
+        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-function formatEndDate(daysFromNow: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + daysFromNow);
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
+// ─── Styles ───────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: theme.colors.background,
+    backgroundColor: C.bg,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: theme.spacing.xl,
-    paddingVertical: theme.spacing.md,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
+    borderBottomColor: C.border,
+    gap: 12,
   },
-  backButton: {
-    width: 40,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
+  backBtn: {
+    padding: 6,
   },
   backIcon: {
     fontSize: 22,
-    color: theme.colors.textPrimary,
+    color: C.textPrimary,
   },
   headerTitle: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.lg,
+    flex: 1,
+    fontSize: 17,
     fontWeight: '700',
-    color: theme.colors.textPrimary,
+    color: C.textPrimary,
   },
-  stepIndicator: {
-    backgroundColor: theme.colors.accentMuted,
-    paddingHorizontal: theme.spacing.sm,
+  stepBadge: {
+    backgroundColor: C.card,
+    borderWidth: 1,
+    borderColor: C.border,
+    paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: theme.borderRadius.full,
+    borderRadius: 9999,
   },
   stepText: {
-    fontFamily: 'JetBrainsMono',
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.accent,
+    fontSize: 12,
     fontWeight: '600',
+    color: C.textSecondary,
   },
   progressBar: {
     height: 2,
-    backgroundColor: theme.colors.border,
+    backgroundColor: C.border,
   },
   progressFill: {
     height: '100%',
-    backgroundColor: theme.colors.accent,
+    borderRadius: 2,
   },
   scroll: {
     flex: 1,
   },
   stepContent: {
-    padding: theme.spacing.xl,
-    gap: theme.spacing.xl,
+    paddingHorizontal: 20,
+    paddingTop: 28,
+    gap: 20,
   },
   stepTitle: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.xxl,
+    fontSize: 22,
     fontWeight: '700',
-    color: theme.colors.textPrimary,
+    color: C.textPrimary,
   },
   stepSubtitle: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.md,
-    color: theme.colors.textSecondary,
-    marginTop: -theme.spacing.md,
+    fontSize: 14,
+    color: C.textSecondary,
+    marginTop: -12,
   },
-  // Pillar grid
+  // Pillar Grid
   pillarGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: theme.spacing.md,
+    gap: 12,
   },
-  pillarCell: {
+  pillarCard: {
     width: '47%',
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.lg,
+    backgroundColor: C.card,
+    borderRadius: 12,
     borderWidth: 1.5,
-    borderColor: theme.colors.border,
-    padding: theme.spacing.lg,
-    gap: theme.spacing.xs,
+    borderColor: C.border,
+    padding: 16,
+    gap: 6,
     position: 'relative',
-  },
-  pillarCellIcon: {
-    fontSize: 28,
-  },
-  pillarCellName: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: '700',
-    color: theme.colors.textPrimary,
-    letterSpacing: 0.5,
-  },
-  pillarCellUnit: {
-    fontFamily: 'JetBrainsMono',
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.textMuted,
   },
   pillarCheck: {
     position: 'absolute',
-    top: theme.spacing.sm,
-    right: theme.spacing.sm,
+    top: 10,
+    right: 10,
     width: 20,
     height: 20,
     borderRadius: 10,
@@ -663,401 +643,270 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '700',
   },
-  pillarInfoCard: {
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.md,
-    borderWidth: 1,
-    padding: theme.spacing.lg,
-    gap: theme.spacing.xs,
+  pillarEmoji: {
+    fontSize: 32,
   },
-  pillarInfoTitle: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.md,
+  pillarLabel: {
+    fontSize: 15,
     fontWeight: '700',
+    color: C.textPrimary,
   },
-  pillarInfoDesc: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.textSecondary,
+  pillarDesc: {
+    fontSize: 11,
+    color: C.textSecondary,
+    lineHeight: 15,
   },
-  pillarInfoSource: {
-    fontFamily: 'JetBrainsMono',
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.textMuted,
+  // Fields
+  fieldGroup: {
+    gap: 8,
   },
-  // Goal step
-  goalInputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.lg,
-    borderWidth: 1.5,
-    borderColor: theme.colors.accent,
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.md,
-    gap: theme.spacing.md,
-  },
-  goalPillarIcon: {
-    fontSize: 24,
-  },
-  goalInput: {
-    flex: 1,
-    fontFamily: 'JetBrainsMono',
-    fontSize: 36,
-    fontWeight: '700',
-    color: theme.colors.textPrimary,
-    padding: 0,
-  },
-  goalUnit: {
-    fontFamily: 'JetBrainsMono',
-    fontSize: theme.typography.fontSize.md,
-    color: theme.colors.textSecondary,
-  },
-  goalHint: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.textMuted,
-    textAlign: 'center',
-  },
-  presets: {
-    flexDirection: 'row',
-    gap: theme.spacing.sm,
-    flexWrap: 'wrap',
-  },
-  preset: {
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
-    borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.card,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-  },
-  presetActive: {
-    backgroundColor: theme.colors.accentMuted,
-    borderColor: theme.colors.accent,
-  },
-  presetText: {
-    fontFamily: 'JetBrainsMono',
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.textSecondary,
+  fieldLabel: {
+    fontSize: 13,
     fontWeight: '600',
+    color: C.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
-  presetTextActive: {
-    color: theme.colors.accent,
-  },
-  nameSection: {
-    gap: theme.spacing.sm,
-  },
-  nameLabel: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.textSecondary,
-    fontWeight: '500',
-  },
-  nameInput: {
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.md,
+  textInput: {
+    backgroundColor: C.card,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.md,
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.md,
-    color: theme.colors.textPrimary,
+    borderColor: C.border,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: C.textPrimary,
   },
-  // Duration step
+  textArea: {
+    height: 80,
+    paddingTop: 12,
+  },
+  fieldHint: {
+    fontSize: 11,
+    color: C.textSecondary,
+    fontStyle: 'italic',
+  },
+  // Duration
   durationGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: theme.spacing.md,
+    gap: 8,
   },
-  durationOption: {
-    flex: 1,
-    minWidth: '30%',
-    paddingVertical: theme.spacing.lg,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.md,
+  durationChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 9999,
+    backgroundColor: C.card,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: C.border,
   },
-  durationOptionActive: {
-    backgroundColor: theme.colors.accentMuted,
-    borderColor: theme.colors.accent,
+  durationChipActive: {
+    backgroundColor: C.primaryMuted,
+    borderColor: C.primary,
   },
-  durationLabel: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.md,
-    color: theme.colors.textSecondary,
+  durationChipText: {
+    fontSize: 14,
     fontWeight: '600',
+    color: C.textSecondary,
   },
-  durationLabelActive: {
-    color: theme.colors.accent,
+  durationChipTextActive: {
+    color: C.primary,
   },
-  customDurationInput: {
+  // Privacy
+  privacyRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.md,
-    borderWidth: 1.5,
-    borderColor: theme.colors.accent,
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.md,
-    gap: theme.spacing.md,
-  },
-  durationSummary: {
-    backgroundColor: theme.colors.accentMuted,
-    borderRadius: theme.borderRadius.md,
-    padding: theme.spacing.lg,
-    alignItems: 'center',
-    gap: 4,
-  },
-  durationSummaryText: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: '600',
-    color: theme.colors.accent,
-  },
-  durationSummarySubtext: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.textSecondary,
-  },
-  // Stake step
-  stakeGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: theme.spacing.md,
-  },
-  stakeOption: {
-    width: '30%',
-    paddingVertical: theme.spacing.lg,
-    alignItems: 'center',
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.md,
+    backgroundColor: C.card,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    gap: 4,
+    borderColor: C.border,
+    padding: 14,
+    gap: 12,
   },
-  stakeOptionActive: {
-    backgroundColor: theme.colors.winMuted,
-    borderColor: theme.colors.win,
-  },
-  stakeOptionFree: {
-    backgroundColor: theme.colors.card,
-    borderColor: theme.colors.textMuted,
-  },
-  stakeAmount: {
-    fontFamily: 'JetBrainsMono',
-    fontSize: theme.typography.fontSize.lg,
-    fontWeight: '700',
-    color: theme.colors.textSecondary,
-  },
-  stakeAmountActive: {
-    color: theme.colors.win,
-  },
-  stakeAmountFree: {
-    color: theme.colors.textMuted,
-  },
-  stakeDesc: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.textMuted,
-  },
-  customStakeInput: {
-    fontFamily: 'JetBrainsMono',
-    fontSize: theme.typography.fontSize.md,
-    color: theme.colors.textPrimary,
-    padding: theme.spacing.sm,
-    width: '100%',
-    textAlign: 'center',
-  },
-  potPreview: {
-    backgroundColor: theme.colors.winMuted,
-    borderRadius: theme.borderRadius.md,
-    borderWidth: 1,
-    borderColor: `${theme.colors.win}30`,
-    padding: theme.spacing.lg,
-    alignItems: 'center',
-    gap: 4,
-  },
-  potPreviewLabel: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.textSecondary,
-  },
-  potPreviewAmount: {
-    fontFamily: 'JetBrainsMono',
-    fontSize: theme.typography.fontSize.xxl,
-    fontWeight: '700',
-    color: theme.colors.win,
-  },
-  potPreviewWinner: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.textSecondary,
-  },
-  // Privacy step
-  privacyOptions: {
-    gap: theme.spacing.md,
-  },
-  privacyOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.lg,
-    borderWidth: 1.5,
-    borderColor: theme.colors.border,
-    padding: theme.spacing.lg,
-  },
-  privacyOptionActive: {
-    borderColor: theme.colors.accent,
-    backgroundColor: theme.colors.accentMuted,
-  },
-  privacyLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.md,
-    flex: 1,
+  privacyRowActive: {
+    borderColor: C.primary,
+    backgroundColor: C.primaryMuted,
   },
   privacyIcon: {
-    fontSize: 24,
+    fontSize: 20,
   },
   privacyLabel: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.md,
+    fontSize: 14,
     fontWeight: '600',
-    color: theme.colors.textSecondary,
-  },
-  privacyLabelActive: {
-    color: theme.colors.accent,
+    color: C.textPrimary,
   },
   privacyDesc: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.textMuted,
+    fontSize: 12,
+    color: C.textSecondary,
     marginTop: 2,
   },
   radioOuter: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
     borderWidth: 2,
-    borderColor: theme.colors.border,
+    borderColor: C.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
   radioOuterActive: {
-    borderColor: theme.colors.accent,
+    borderColor: C.primary,
   },
   radioInner: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: theme.colors.accent,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: C.primary,
   },
-  // Preview card
-  previewSection: {
-    paddingHorizontal: theme.spacing.xl,
-    gap: theme.spacing.sm,
-  },
-  previewLabel: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.textMuted,
-    fontWeight: '600',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  previewCard: {
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.lg,
-    borderWidth: 1,
-    padding: theme.spacing.lg,
-    gap: theme.spacing.md,
-  },
-  previewHeader: {
+  // Stake
+  stakeGrid: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: theme.spacing.md,
+    flexWrap: 'wrap',
+    gap: 10,
   },
-  previewPillarIcon: {
-    fontSize: 28,
+  stakeChip: {
+    width: '47%',
+    paddingVertical: 16,
+    borderRadius: 12,
+    backgroundColor: C.card,
+    borderWidth: 1,
+    borderColor: C.border,
+    alignItems: 'center',
   },
-  previewHeaderRight: {
-    flex: 1,
+  stakeChipActive: {
+    backgroundColor: C.primaryMuted,
+    borderColor: C.primary,
+  },
+  stakeChipText: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: C.textSecondary,
+  },
+  stakeChipTextActive: {
+    color: C.primary,
+  },
+  potPreview: {
+    backgroundColor: `${C.success}10`,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: `${C.success}30`,
+    padding: 16,
+    alignItems: 'center',
     gap: 4,
   },
-  previewName: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: '600',
-    color: theme.colors.textPrimary,
-    lineHeight: 20,
+  potPreviewLabel: {
+    fontSize: 12,
+    color: C.textSecondary,
   },
-  previewPillar: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.xs,
+  potPreviewAmount: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: C.success,
+  },
+  potPreviewWinner: {
+    fontSize: 12,
+    color: C.textSecondary,
+  },
+  freeOption: {
+    alignItems: 'center',
+  },
+  freeBtn: {
+    paddingVertical: 10,
+  },
+  freeBtnText: {
+    fontSize: 13,
+    color: C.textSecondary,
+  },
+  // Confirm
+  confirmCard: {
+    backgroundColor: C.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  confirmHero: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    padding: 20,
+  },
+  confirmEmoji: {
+    fontSize: 40,
+  },
+  confirmPillar: {
+    fontSize: 11,
     fontWeight: '700',
     letterSpacing: 1,
   },
-  previewStats: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
-    paddingTop: theme.spacing.md,
-  },
-  previewStat: {
-    alignItems: 'center',
-    gap: 2,
-  },
-  previewStatValue: {
-    fontFamily: 'JetBrainsMono',
-    fontSize: theme.typography.fontSize.sm,
+  confirmName: {
+    fontSize: 16,
     fontWeight: '700',
-    color: theme.colors.textPrimary,
+    color: C.textPrimary,
+    marginTop: 2,
   },
-  previewStatLabel: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.textMuted,
+  confirmDetails: {
+    padding: 16,
+    gap: 0,
   },
-  stakeValueGreen: {
-    color: theme.colors.win,
+  confirmRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
   },
-  stakeValueGray: {
-    color: theme.colors.textMuted,
+  confirmRowLabel: {
+    fontSize: 13,
+    color: C.textSecondary,
+  },
+  confirmRowValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: C.textPrimary,
+    textTransform: 'capitalize',
+  },
+  confirmDivider: {
+    height: 1,
+    backgroundColor: C.border,
+  },
+  deployBtn: {
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 52,
+  },
+  deployBtnLoading: {
+    opacity: 0.7,
+  },
+  deployBtnText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  deployNote: {
+    fontSize: 12,
+    color: C.textSecondary,
+    textAlign: 'center',
   },
   // Bottom bar
   bottomBar: {
-    paddingHorizontal: theme.spacing.xl,
-    paddingTop: theme.spacing.md,
-    paddingBottom: theme.spacing.xxl,
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
-    backgroundColor: theme.colors.background,
+    borderTopColor: C.border,
   },
-  nextButton: {
-    backgroundColor: theme.colors.accent,
-    borderRadius: theme.borderRadius.md,
+  nextBtn: {
     paddingVertical: 16,
+    borderRadius: 12,
     alignItems: 'center',
-    ...theme.shadows.accent,
   },
-  nextButtonDisabled: {
+  nextBtnDisabled: {
     opacity: 0.4,
   },
-  nextButtonText: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.md,
+  nextBtnText: {
+    fontSize: 16,
     fontWeight: '700',
     color: '#FFFFFF',
-    letterSpacing: 0.3,
-  },
-  deployButton: {
-    width: '100%',
   },
 });

@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import {
   supabase,
@@ -8,58 +9,199 @@ import {
   ChallengeParticipant,
 } from '../lib/supabase';
 
-interface UseChallengeState {
+// ─── Pillar emoji map ─────────────────────────────────────────────────────────
+export const PILLAR_EMOJI: Record<string, string> = {
+  run: '🏃',
+  fast: '⚡',
+  sleep: '🌙',
+  meditate: '🧘',
+  cycle: '🚴',
+  walk: '🚶',
+  hrv: '💓',
+  readiness: '⚡',
+};
+
+export function getPillarEmoji(pillarId: string): string {
+  return PILLAR_EMOJI[pillarId] ?? '🏆';
+}
+
+// ─── Mock fallback data ────────────────────────────────────────────────────────
+const MOCK_CHALLENGES: Challenge[] = [
+  {
+    id: 'mock-1',
+    creator_id: 'mock-user',
+    name: '30-Day Run Challenge',
+    pillar_id: 'run',
+    goal: 100,
+    duration_days: 30,
+    stake_usdc: 25,
+    privacy: 'public',
+    contract_address: null,
+    total_pot_usdc: 250,
+    participant_count: 10,
+    starts_at: new Date(Date.now() - 7 * 86400000).toISOString(),
+    ends_at: new Date(Date.now() + 23 * 86400000).toISOString(),
+    created_at: new Date(Date.now() - 7 * 86400000).toISOString(),
+    status: 'active',
+  },
+  {
+    id: 'mock-2',
+    creator_id: 'mock-user',
+    name: 'Weekly Fast Protocol',
+    pillar_id: 'fast',
+    goal: 112,
+    duration_days: 14,
+    stake_usdc: 10,
+    privacy: 'public',
+    contract_address: null,
+    total_pot_usdc: 80,
+    participant_count: 8,
+    starts_at: new Date(Date.now() - 3 * 86400000).toISOString(),
+    ends_at: new Date(Date.now() + 11 * 86400000).toISOString(),
+    created_at: new Date(Date.now() - 3 * 86400000).toISOString(),
+    status: 'active',
+  },
+  {
+    id: 'mock-3',
+    creator_id: 'mock-user',
+    name: 'Optimal Sleep Protocol',
+    pillar_id: 'sleep',
+    goal: 85,
+    duration_days: 30,
+    stake_usdc: 50,
+    privacy: 'public',
+    contract_address: null,
+    total_pot_usdc: 500,
+    participant_count: 12,
+    starts_at: new Date(Date.now() - 5 * 86400000).toISOString(),
+    ends_at: new Date(Date.now() + 25 * 86400000).toISOString(),
+    created_at: new Date(Date.now() - 5 * 86400000).toISOString(),
+    status: 'active',
+  },
+];
+
+// ─── Query Keys ────────────────────────────────────────────────────────────────
+export const challengeKeys = {
+  all: ['challenges'] as const,
+  userActive: (userId: string) => ['challenges', 'user', userId, 'active'] as const,
+  public: (filter?: string) => ['challenges', 'public', filter ?? 'all'] as const,
+  detail: (id: string) => ['challenges', 'detail', id] as const,
+  participants: (id: string) => ['challenges', id, 'participants'] as const,
+};
+
+// ─── useChallenges — user's active challenges ─────────────────────────────────
+export function useChallenges(userId?: string) {
+  const query = useQuery({
+    queryKey: challengeKeys.userActive(userId ?? ''),
+    enabled: !!userId,
+    queryFn: async (): Promise<Challenge[]> => {
+      // Step 1: get challenge IDs where user participates
+      const { data: participantData, error: pErr } = await supabase
+        .from('challenge_participants')
+        .select('challenge_id')
+        .eq('user_id', userId!);
+
+      if (pErr) throw pErr;
+
+      const ids = (participantData ?? []).map((p) => p.challenge_id);
+      if (ids.length === 0) return MOCK_CHALLENGES.slice(0, 2);
+
+      // Step 2: fetch those challenges
+      const { data, error } = await supabase
+        .from('challenges')
+        .select('*')
+        .in('id', ids)
+        .eq('status', 'active')
+        .order('ends_at', { ascending: true });
+
+      if (error) throw error;
+      const results = data ?? [];
+      return results.length > 0 ? results : MOCK_CHALLENGES.slice(0, 2);
+    },
+    staleTime: 60_000,
+  });
+
+  return {
+    challenges: query.data ?? [],
+    loading: query.isLoading,
+    error: query.error,
+    refresh: query.refetch,
+    isRefetching: query.isRefetching,
+  };
+}
+
+// ─── usePublicChallenges — explore feed ──────────────────────────────────────
+export function usePublicChallenges(pillarFilter?: string) {
+  const query = useQuery({
+    queryKey: challengeKeys.public(pillarFilter),
+    queryFn: async (): Promise<Challenge[]> => {
+      let q = supabase
+        .from('challenges')
+        .select('*')
+        .eq('privacy', 'public')
+        .eq('status', 'active')
+        .order('participant_count', { ascending: false })
+        .limit(50);
+
+      if (pillarFilter && pillarFilter !== 'all') {
+        q = q.eq('pillar_id', pillarFilter);
+      }
+
+      const { data, error } = await q;
+      if (error) throw error;
+      const results = data ?? [];
+      return results.length > 0 ? results : MOCK_CHALLENGES;
+    },
+    staleTime: 60_000,
+  });
+
+  return {
+    challenges: query.data ?? [],
+    loading: query.isLoading,
+    error: query.error,
+    refresh: query.refetch,
+    isRefetching: query.isRefetching,
+  };
+}
+
+// ─── useChallenge — single challenge + participants ───────────────────────────
+interface ChallengeDetail {
   challenge: Challenge | null;
   leaderboard: LeaderboardEntry[];
   myEntry: LeaderboardEntry | null;
-  loading: boolean;
-  error: Error | null;
 }
 
-interface UseChallengeActions {
-  refresh: () => Promise<void>;
-  submitProgress: (progress: number) => Promise<void>;
-}
-
-export type UseChallengeReturn = UseChallengeState & UseChallengeActions;
-
-export function useChallenge(
-  challengeId: string,
+function buildLeaderboard(
+  participants: (ChallengeParticipant & { profiles: Profile })[],
+  target: number,
   currentUserId?: string
-): UseChallengeReturn {
-  const [challenge, setChallenge] = useState<Challenge | null>(null);
-  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
-  const [myEntry, setMyEntry] = useState<LeaderboardEntry | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
+): { entries: LeaderboardEntry[]; myEntry: LeaderboardEntry | null } {
+  const entries = [...participants]
+    .sort((a, b) => b.progress - a.progress)
+    .map((p, idx) => ({
+      rank: idx + 1,
+      user: p.profiles,
+      progress: p.progress,
+      target,
+      stake: p.stake_usdc,
+      completed: p.completed,
+    }));
+
+  const myEntry = currentUserId
+    ? (entries.find((e) => e.user?.id === currentUserId) ?? null)
+    : null;
+
+  return { entries, myEntry };
+}
+
+export function useChallenge(challengeId: string, currentUserId?: string) {
+  const queryClient = useQueryClient();
   const channelRef = useRef<RealtimeChannel | null>(null);
 
-  const buildLeaderboard = useCallback(
-    (
-      participants: (ChallengeParticipant & { profiles: Profile })[],
-      target: number
-    ): LeaderboardEntry[] => {
-      return participants
-        .sort((a, b) => b.progress - a.progress)
-        .map((p, index) => ({
-          rank: index + 1,
-          user: p.profiles,
-          progress: p.progress,
-          target,
-          stake: p.stake_usdc,
-          completed: p.completed,
-        }));
-    },
-    []
-  );
-
-  const fetchChallenge = useCallback(async () => {
-    if (!challengeId) return;
-
-    try {
-      setLoading(true);
-      setError(null);
-
+  const query = useQuery({
+    queryKey: [...challengeKeys.detail(challengeId), currentUserId],
+    enabled: !!challengeId,
+    queryFn: async (): Promise<ChallengeDetail> => {
       const { data: challengeData, error: challengeError } = await supabase
         .from('challenges')
         .select('*')
@@ -68,44 +210,35 @@ export function useChallenge(
 
       if (challengeError) throw challengeError;
 
-      setChallenge(challengeData);
-
       const { data: participantsData, error: participantsError } = await supabase
         .from('challenge_participants')
-        .select(`
-          *,
-          profiles (*)
-        `)
+        .select('*, profiles(*)')
         .eq('challenge_id', challengeId)
         .order('progress', { ascending: false });
 
       if (participantsError) throw participantsError;
 
-      const entries = buildLeaderboard(
-        participantsData as (ChallengeParticipant & { profiles: Profile })[],
-        challengeData.goal
+      const { entries, myEntry } = buildLeaderboard(
+        (participantsData ?? []) as (ChallengeParticipant & { profiles: Profile })[],
+        challengeData.goal,
+        currentUserId
       );
 
-      setLeaderboard(entries);
+      return { challenge: challengeData, leaderboard: entries, myEntry };
+    },
+    staleTime: 30_000,
+  });
 
-      if (currentUserId) {
-        const mine = entries.find((e) => e.user.id === currentUserId) ?? null;
-        setMyEntry(mine);
-      }
-    } catch (err) {
-      setError(err as Error);
-    } finally {
-      setLoading(false);
-    }
-  }, [challengeId, currentUserId, buildLeaderboard]);
+  // Real-time subscription
+  useEffect(() => {
+    if (!challengeId) return;
 
-  const subscribeToRealtime = useCallback(() => {
     if (channelRef.current) {
       supabase.removeChannel(channelRef.current);
     }
 
     const channel = supabase
-      .channel(`challenge:${challengeId}`)
+      .channel(`challenge-detail:${challengeId}`)
       .on(
         'postgres_changes',
         {
@@ -114,8 +247,10 @@ export function useChallenge(
           table: 'challenge_participants',
           filter: `challenge_id=eq.${challengeId}`,
         },
-        async () => {
-          await fetchChallenge();
+        () => {
+          queryClient.invalidateQueries({
+            queryKey: challengeKeys.detail(challengeId),
+          });
         }
       )
       .on(
@@ -126,24 +261,15 @@ export function useChallenge(
           table: 'challenges',
           filter: `id=eq.${challengeId}`,
         },
-        async (payload) => {
-          setChallenge((prev) =>
-            prev ? { ...prev, ...(payload.new as Challenge) } : null
-          );
+        () => {
+          queryClient.invalidateQueries({
+            queryKey: challengeKeys.detail(challengeId),
+          });
         }
       )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log(`[useChallenge] Subscribed to challenge ${challengeId}`);
-        }
-      });
+      .subscribe();
 
     channelRef.current = channel;
-  }, [challengeId, fetchChallenge]);
-
-  useEffect(() => {
-    fetchChallenge();
-    subscribeToRealtime();
 
     return () => {
       if (channelRef.current) {
@@ -151,90 +277,145 @@ export function useChallenge(
         channelRef.current = null;
       }
     };
-  }, [fetchChallenge, subscribeToRealtime]);
+  }, [challengeId, queryClient]);
 
   const submitProgress = useCallback(
     async (progress: number) => {
       if (!challengeId || !currentUserId) return;
-
-      const { error: updateError } = await supabase
+      const { error } = await supabase
         .from('challenge_participants')
-        .update({
-          progress,
-          updated_at: new Date().toISOString(),
-        })
+        .update({ progress, updated_at: new Date().toISOString() })
         .eq('challenge_id', challengeId)
         .eq('user_id', currentUserId);
-
-      if (updateError) throw updateError;
+      if (error) throw error;
+      queryClient.invalidateQueries({ queryKey: challengeKeys.detail(challengeId) });
     },
-    [challengeId, currentUserId]
+    [challengeId, currentUserId, queryClient]
   );
 
   return {
-    challenge,
-    leaderboard,
-    myEntry,
-    loading,
-    error,
-    refresh: fetchChallenge,
+    challenge: query.data?.challenge ?? null,
+    leaderboard: query.data?.leaderboard ?? [],
+    myEntry: query.data?.myEntry ?? null,
+    loading: query.isLoading,
+    error: query.error as Error | null,
+    refresh: query.refetch,
     submitProgress,
   };
 }
 
-// Hook for fetching multiple challenges (home feed, explore)
-export function useChallenges(options?: {
-  pillarId?: string;
-  status?: 'active' | 'completed';
-  limit?: number;
-  userId?: string;
-}) {
-  const [challenges, setChallenges] = useState<Challenge[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
+// ─── useCreateChallenge ────────────────────────────────────────────────────────
+interface CreateChallengeInput {
+  creator_id: string;
+  name: string;
+  pillar_id: string;
+  goal: number;
+  duration_days: number;
+  stake_usdc: number;
+  privacy: 'public' | 'friends' | 'private';
+}
 
-  const fetch = useCallback(async () => {
-    try {
-      setLoading(true);
-      let query = supabase
+export function useCreateChallenge() {
+  const queryClient = useQueryClient();
+
+  const mutation = useMutation({
+    mutationFn: async (input: CreateChallengeInput): Promise<Challenge> => {
+      const startsAt = new Date();
+      const endsAt = new Date();
+      endsAt.setDate(endsAt.getDate() + input.duration_days);
+
+      const { data, error } = await supabase
         .from('challenges')
-        .select('*')
-        .order('created_at', { ascending: false });
+        .insert({
+          creator_id: input.creator_id,
+          name: input.name,
+          pillar_id: input.pillar_id,
+          goal: input.goal,
+          duration_days: input.duration_days,
+          stake_usdc: input.stake_usdc,
+          privacy: input.privacy,
+          total_pot_usdc: input.stake_usdc,
+          participant_count: 1,
+          starts_at: startsAt.toISOString(),
+          ends_at: endsAt.toISOString(),
+          status: 'active',
+        })
+        .select()
+        .single();
 
-      if (options?.pillarId) {
-        query = query.eq('pillar_id', options.pillarId);
+      if (error) throw error;
+
+      // Auto-join creator
+      const { error: joinError } = await supabase
+        .from('challenge_participants')
+        .insert({
+          challenge_id: data.id,
+          user_id: input.creator_id,
+          progress: 0,
+          stake_usdc: input.stake_usdc,
+          completed: false,
+          rank: 1,
+        });
+
+      if (joinError) throw joinError;
+
+      return data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: challengeKeys.all });
+    },
+  });
+
+  return mutation;
+}
+
+// ─── useJoinChallenge ─────────────────────────────────────────────────────────
+interface JoinChallengeInput {
+  challenge_id: string;
+  user_id: string;
+  stake_usdc: number;
+}
+
+export function useJoinChallenge() {
+  const queryClient = useQueryClient();
+
+  const mutation = useMutation({
+    mutationFn: async (input: JoinChallengeInput) => {
+      // Insert participant
+      const { error: joinError } = await supabase
+        .from('challenge_participants')
+        .insert({
+          challenge_id: input.challenge_id,
+          user_id: input.user_id,
+          progress: 0,
+          stake_usdc: input.stake_usdc,
+          completed: false,
+        });
+
+      if (joinError) throw joinError;
+
+      // Update challenge pot + participant count
+      const { data: current, error: fetchErr } = await supabase
+        .from('challenges')
+        .select('total_pot_usdc, participant_count')
+        .eq('id', input.challenge_id)
+        .single();
+
+      if (!fetchErr && current) {
+        await supabase
+          .from('challenges')
+          .update({
+            total_pot_usdc: (current.total_pot_usdc ?? 0) + input.stake_usdc,
+            participant_count: (current.participant_count ?? 0) + 1,
+          })
+          .eq('id', input.challenge_id);
       }
-      if (options?.status) {
-        query = query.eq('status', options.status);
-      }
-      if (options?.limit) {
-        query = query.limit(options.limit);
-      }
-      if (options?.userId) {
-        const { data: participantData } = await supabase
-          .from('challenge_participants')
-          .select('challenge_id')
-          .eq('user_id', options.userId);
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: challengeKeys.detail(variables.challenge_id) });
+      queryClient.invalidateQueries({ queryKey: challengeKeys.all });
+    },
+  });
 
-        const ids = (participantData ?? []).map((p) => p.challenge_id);
-        if (ids.length > 0) {
-          query = query.in('id', ids);
-        }
-      }
-
-      const { data, error: fetchError } = await query;
-      if (fetchError) throw fetchError;
-      setChallenges(data ?? []);
-    } catch (err) {
-      setError(err as Error);
-    } finally {
-      setLoading(false);
-    }
-  }, [options?.pillarId, options?.status, options?.limit, options?.userId]);
-
-  useEffect(() => {
-    fetch();
-  }, [fetch]);
-
-  return { challenges, loading, error, refresh: fetch };
+  return mutation;
 }

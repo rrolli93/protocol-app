@@ -7,106 +7,149 @@ import {
   TouchableOpacity,
   RefreshControl,
   FlatList,
-  Image,
   StatusBar,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { theme } from '../../constants/theme';
-import { ChallengeCard } from '../../components/ChallengeCard';
-import { WalletBadge } from '../../components/WalletBadge';
 import { useAuth } from '../../hooks/useAuth';
-import { useWallet } from '../../hooks/useWallet';
-import { useChallenges } from '../../hooks/useChallenge';
+import { useChallenges, usePublicChallenges, getPillarEmoji } from '../../hooks/useChallenge';
 import { Challenge } from '../../lib/supabase';
 
-// Mock friends activity data — replace with real feed from Supabase
-const FRIENDS_ACTIVITY = [
-  {
-    id: '1',
-    user: { name: 'alex_runs', avatar: null, initials: 'AR' },
-    action: 'completed Day 7',
-    challenge: '30-Day Run Challenge',
-    time: '2m ago',
-    pillarIcon: '🏃',
-    pillarColor: '#FF6B35',
-  },
-  {
-    id: '2',
-    user: { name: 'sleepking', avatar: null, initials: 'SK' },
-    action: 'hit sleep score 92',
-    challenge: 'Optimal Sleep Protocol',
-    time: '14m ago',
-    pillarIcon: '😴',
-    pillarColor: '#6C63FF',
-  },
-  {
-    id: '3',
-    user: { name: 'fasted_beast', avatar: null, initials: 'FB' },
-    action: 'logged 18hr fast',
-    challenge: 'Weekly Fast Challenge',
-    time: '1h ago',
-    pillarIcon: '⚡',
-    pillarColor: '#EC4899',
-  },
-  {
-    id: '4',
-    user: { name: 'mindful_m', avatar: null, initials: 'MM' },
-    action: 'meditated 20 minutes',
-    challenge: 'Meditation Streak',
-    time: '3h ago',
-    pillarIcon: '🧘',
-    pillarColor: '#8B5CF6',
-  },
-];
+// ─── Design Tokens ────────────────────────────────────────────────────────────
+const C = {
+  bg: '#0A0A0F',
+  primary: '#6C63FF',
+  success: '#00FF87',
+  error: '#FF4757',
+  card: '#0D0D1A',
+  border: '#1A1A2E',
+  textPrimary: '#FFFFFF',
+  textSecondary: '#8888AA',
+  primaryMuted: 'rgba(108,99,255,0.12)',
+  successMuted: 'rgba(0,255,135,0.12)',
+};
 
-interface FriendActivityItemProps {
-  item: typeof FRIENDS_ACTIVITY[0];
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function getTimeOfDay(): string {
+  const h = new Date().getHours();
+  if (h < 12) return 'morning';
+  if (h < 17) return 'afternoon';
+  return 'evening';
 }
 
-const FriendActivityItem: React.FC<FriendActivityItemProps> = ({ item }) => (
-  <View style={styles.activityItem}>
-    <View style={styles.activityAvatarWrap}>
-      <View style={[styles.activityAvatar, { borderColor: item.pillarColor }]}>
-        <Text style={styles.activityAvatarText}>{item.user.initials}</Text>
-      </View>
-      <View style={[styles.activityPillarDot, { backgroundColor: item.pillarColor }]}>
-        <Text style={{ fontSize: 8 }}>{item.pillarIcon}</Text>
-      </View>
-    </View>
-    <View style={styles.activityContent}>
-      <Text style={styles.activityText}>
-        <Text style={styles.activityName}>{item.user.name}</Text>
-        {' '}{item.action} in{' '}
-        <Text style={styles.activityChallenge}>{item.challenge}</Text>
-      </Text>
-      <Text style={styles.activityTime}>{item.time}</Text>
-    </View>
+function getDaysRemaining(endsAt: string): number {
+  return Math.max(0, Math.ceil((new Date(endsAt).getTime() - Date.now()) / 86400000));
+}
+
+function getProgress(challenge: Challenge): number {
+  // Returns 0 until real progress syncing is implemented
+  return 0;
+}
+
+// ─── Stat Card ────────────────────────────────────────────────────────────────
+const StatBadge: React.FC<{ label: string; value: string | number; color?: string }> = ({
+  label,
+  value,
+  color = C.textPrimary,
+}) => (
+  <View style={styles.statBadge}>
+    <Text style={[styles.statValue, { color }]}>{value}</Text>
+    <Text style={styles.statLabel}>{label}</Text>
   </View>
 );
 
+// ─── Active Challenge Card ────────────────────────────────────────────────────
+const ActiveCard: React.FC<{ item: Challenge; onPress: () => void }> = ({ item, onPress }) => {
+  const emoji = getPillarEmoji(item.pillar_id);
+  const daysLeft = getDaysRemaining(item.ends_at);
+  const progress = getProgress(item);
+  const progressPct = Math.min(100, Math.round(progress * 100));
+
+  return (
+    <TouchableOpacity style={styles.activeCard} onPress={onPress} activeOpacity={0.8}>
+      <View style={styles.activeCardTop}>
+        <Text style={styles.activeCardEmoji}>{emoji}</Text>
+        <View style={styles.activeCardBadge}>
+          <View style={styles.activeDot} />
+          <Text style={styles.activeCardBadgeText}>ACTIVE</Text>
+        </View>
+      </View>
+
+      <Text style={styles.activeCardName} numberOfLines={2}>{item.name}</Text>
+
+      <View style={styles.activeCardMeta}>
+        <Text style={styles.metaChip}>👥 {item.participant_count}</Text>
+        {item.total_pot_usdc > 0 && (
+          <Text style={[styles.metaChip, { color: C.success }]}>${item.total_pot_usdc} USDC</Text>
+        )}
+        <Text style={[styles.metaChip, daysLeft <= 2 ? { color: C.error } : {}]}>
+          {daysLeft}d left
+        </Text>
+      </View>
+
+      {/* Progress bar */}
+      <View style={styles.progressTrack}>
+        <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
+      </View>
+      <Text style={styles.progressLabel}>{progressPct}% complete</Text>
+    </TouchableOpacity>
+  );
+};
+
+// ─── Trending Card ────────────────────────────────────────────────────────────
+const TrendingCard: React.FC<{ item: Challenge; rank: number; onPress: () => void }> = ({
+  item,
+  rank,
+  onPress,
+}) => {
+  const emoji = getPillarEmoji(item.pillar_id);
+  return (
+    <TouchableOpacity style={styles.trendingCard} onPress={onPress} activeOpacity={0.8}>
+      <Text style={styles.trendingRank}>#{rank}</Text>
+      <Text style={styles.trendingEmoji}>{emoji}</Text>
+      <View style={styles.trendingInfo}>
+        <Text style={styles.trendingName} numberOfLines={1}>{item.name}</Text>
+        <Text style={styles.trendingMeta}>
+          {item.participant_count} players · ${item.total_pot_usdc} pot
+        </Text>
+      </View>
+      <Text style={styles.trendingArrow}>›</Text>
+    </TouchableOpacity>
+  );
+};
+
+// ─── Home Screen ─────────────────────────────────────────────────────────────
 export default function HomeScreen() {
   const router = useRouter();
   const { user, profile } = useAuth();
-  const { address, balanceUsdc, isConnected } = useWallet();
   const [refreshing, setRefreshing] = useState(false);
 
-  const { challenges: activeChallenges, loading: activLoading, refresh: refreshActive } =
-    useChallenges({ status: 'active', userId: user?.id, limit: 10 });
+  const {
+    challenges: activeChallenges,
+    loading: activeLoading,
+    refresh: refreshActive,
+    isRefetching: activeRefetching,
+  } = useChallenges(user?.id);
 
-  const { challenges: endingSoon, refresh: refreshEndingSoon } =
-    useChallenges({ status: 'active', limit: 5 });
+  const {
+    challenges: allPublic,
+    loading: trendingLoading,
+    refresh: refreshTrending,
+  } = usePublicChallenges();
 
-  const endingSoonFiltered = endingSoon.filter((c) => {
-    const hoursLeft = (new Date(c.ends_at).getTime() - Date.now()) / (1000 * 60 * 60);
-    return hoursLeft <= 24;
-  });
+  const trendingChallenges = allPublic.slice(0, 3);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([refreshActive(), refreshEndingSoon()]);
+    await Promise.all([refreshActive(), refreshTrending()]);
     setRefreshing(false);
-  }, [refreshActive, refreshEndingSoon]);
+  }, [refreshActive, refreshTrending]);
+
+  const username = profile?.username ?? user?.email?.split('@')[0] ?? 'athlete';
+  const totalWon = profile?.challenges_won ?? 0;
+  const totalEarned = profile?.total_earned_usdc ?? 0;
+  const activeCount = activeChallenges.length;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -114,21 +157,14 @@ export default function HomeScreen() {
 
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>PROTOCOL</Text>
-        {isConnected && address ? (
-          <WalletBadge
-            address={address}
-            balance={balanceUsdc}
-            compact
-          />
-        ) : (
-          <TouchableOpacity
-            style={styles.connectButton}
-            onPress={() => router.push('/(auth)/login')}
-          >
-            <Text style={styles.connectButtonText}>Connect Wallet</Text>
-          </TouchableOpacity>
-        )}
+        <Text style={styles.headerLogo}>PROTOCOL</Text>
+        <TouchableOpacity
+          style={styles.headerBtn}
+          onPress={() => router.push('/(tabs)/create')}
+          activeOpacity={0.75}
+        >
+          <Text style={styles.headerBtnText}>+ New</Text>
+        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -138,24 +174,34 @@ export default function HomeScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={handleRefresh}
-            tintColor={theme.colors.accent}
+            tintColor={C.primary}
           />
         }
       >
         {/* Greeting */}
-        <View style={styles.greeting}>
+        <View style={styles.greetingSection}>
           <Text style={styles.greetingText}>
             Good {getTimeOfDay()},{' '}
-            <Text style={styles.greetingName}>
-              {profile?.username ?? 'athlete'}
-            </Text>{' '}
-            👋
+            <Text style={styles.greetingName}>{username}</Text> 👋
           </Text>
           <Text style={styles.greetingSubtext}>
-            {activeChallenges.length > 0
-              ? `${activeChallenges.length} active challenge${activeChallenges.length !== 1 ? 's' : ''}`
+            {activeCount > 0
+              ? `You have ${activeCount} active challenge${activeCount !== 1 ? 's' : ''}`
               : 'No active challenges — start one!'}
           </Text>
+        </View>
+
+        {/* Stats Row */}
+        <View style={styles.statsRow}>
+          <StatBadge label="Active" value={activeCount} color={C.primary} />
+          <View style={styles.statDivider} />
+          <StatBadge label="Won" value={totalWon} color={C.success} />
+          <View style={styles.statDivider} />
+          <StatBadge
+            label="Earned"
+            value={`$${totalEarned.toFixed(0)}`}
+            color={C.success}
+          />
         </View>
 
         {/* My Active Challenges */}
@@ -167,7 +213,11 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
 
-          {activeChallenges.length === 0 ? (
+          {activeLoading && !refreshing ? (
+            <View style={styles.loadingBox}>
+              <ActivityIndicator color={C.primary} />
+            </View>
+          ) : activeChallenges.length === 0 ? (
             <View style={styles.emptyCard}>
               <Text style={styles.emptyIcon}>🏆</Text>
               <Text style={styles.emptyTitle}>No Active Challenges</Text>
@@ -175,7 +225,7 @@ export default function HomeScreen() {
                 Join a challenge and start earning USDC
               </Text>
               <TouchableOpacity
-                style={styles.emptyAction}
+                style={styles.emptyActionBtn}
                 onPress={() => router.push('/(tabs)/explore')}
               >
                 <Text style={styles.emptyActionText}>Explore Challenges →</Text>
@@ -189,49 +239,41 @@ export default function HomeScreen() {
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.horizontalList}
               renderItem={({ item }) => (
-                <ChallengeCard
-                  challenge={item}
-                  showProgress
-                  userProgress={0}
+                <ActiveCard
+                  item={item}
+                  onPress={() => router.push(`/challenge/${item.id}`)}
                 />
               )}
-              ItemSeparatorComponent={() => <View style={{ width: theme.spacing.md }} />}
+              ItemSeparatorComponent={() => <View style={{ width: 12 }} />}
             />
           )}
         </View>
 
-        {/* Ending Soon */}
-        {endingSoonFiltered.length > 0 && (
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.urgentLabel}>
-                <View style={styles.urgentDot} />
-                <Text style={styles.sectionTitle}>Ending Soon</Text>
-              </View>
-            </View>
-            {endingSoonFiltered.map((challenge) => (
-              <ChallengeCard
-                key={challenge.id}
-                challenge={challenge}
-                compact
-                style={styles.compactCard}
-              />
-            ))}
-          </View>
-        )}
-
-        {/* Friends Activity */}
+        {/* Trending */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Friends Activity</Text>
-            <TouchableOpacity>
-              <Text style={styles.sectionAction}>Follow More</Text>
+            <Text style={styles.sectionTitle}>🔥 Trending</Text>
+            <TouchableOpacity onPress={() => router.push('/(tabs)/explore')}>
+              <Text style={styles.sectionAction}>View All</Text>
             </TouchableOpacity>
           </View>
 
-          {FRIENDS_ACTIVITY.map((item) => (
-            <FriendActivityItem key={item.id} item={item} />
-          ))}
+          {trendingLoading && !refreshing ? (
+            <View style={styles.loadingBox}>
+              <ActivityIndicator color={C.primary} />
+            </View>
+          ) : (
+            <View style={styles.trendingList}>
+              {trendingChallenges.map((item, idx) => (
+                <TrendingCard
+                  key={item.id}
+                  item={item}
+                  rank={idx + 1}
+                  onPress={() => router.push(`/challenge/${item.id}`)}
+                />
+              ))}
+            </View>
+          )}
         </View>
 
         <View style={{ height: 100 }} />
@@ -249,205 +291,267 @@ export default function HomeScreen() {
   );
 }
 
-function getTimeOfDay(): string {
-  const hour = new Date().getHours();
-  if (hour < 12) return 'morning';
-  if (hour < 17) return 'afternoon';
-  return 'evening';
-}
-
+// ─── Styles ───────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: theme.colors.background,
+    backgroundColor: C.bg,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: theme.spacing.xl,
-    paddingVertical: theme.spacing.md,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
+    borderBottomColor: C.border,
   },
-  headerTitle: {
-    fontFamily: 'Inter',
+  headerLogo: {
     fontSize: 18,
     fontWeight: '700',
-    color: theme.colors.textPrimary,
+    color: C.textPrimary,
     letterSpacing: 4,
   },
-  connectButton: {
-    backgroundColor: theme.colors.accentMuted,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
-    borderRadius: theme.borderRadius.full,
+  headerBtn: {
+    backgroundColor: C.primaryMuted,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 9999,
     borderWidth: 1,
-    borderColor: `${theme.colors.accent}40`,
+    borderColor: `${C.primary}40`,
   },
-  connectButtonText: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.accent,
+  headerBtnText: {
+    fontSize: 13,
     fontWeight: '600',
+    color: C.primary,
   },
   scroll: {
     flex: 1,
   },
-  greeting: {
-    paddingHorizontal: theme.spacing.xl,
-    paddingVertical: theme.spacing.xl,
+  greetingSection: {
+    paddingHorizontal: 20,
+    paddingTop: 24,
+    paddingBottom: 16,
   },
   greetingText: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.xl,
-    color: theme.colors.textPrimary,
-    fontWeight: '600',
+    fontSize: 22,
+    fontWeight: '700',
+    color: C.textPrimary,
+    lineHeight: 28,
   },
   greetingName: {
-    color: theme.colors.accent,
+    color: C.primary,
   },
   greetingSubtext: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.textSecondary,
+    fontSize: 13,
+    color: C.textSecondary,
     marginTop: 4,
   },
+  statsRow: {
+    flexDirection: 'row',
+    marginHorizontal: 20,
+    marginBottom: 28,
+    backgroundColor: C.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    overflow: 'hidden',
+  },
+  statBadge: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 16,
+    gap: 2,
+  },
+  statValue: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: C.textPrimary,
+  },
+  statLabel: {
+    fontSize: 11,
+    color: C.textSecondary,
+  },
+  statDivider: {
+    width: 1,
+    marginVertical: 12,
+    backgroundColor: C.border,
+  },
   section: {
-    marginBottom: theme.spacing.xxl,
+    marginBottom: 28,
   },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: theme.spacing.xl,
-    marginBottom: theme.spacing.md,
+    paddingHorizontal: 20,
+    marginBottom: 12,
   },
   sectionTitle: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: '600',
-    color: theme.colors.textPrimary,
+    fontSize: 16,
+    fontWeight: '700',
+    color: C.textPrimary,
   },
   sectionAction: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.accent,
+    fontSize: 13,
+    color: C.primary,
+    fontWeight: '600',
   },
   horizontalList: {
-    paddingHorizontal: theme.spacing.xl,
+    paddingHorizontal: 20,
+  },
+  loadingBox: {
+    height: 80,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   emptyCard: {
-    marginHorizontal: theme.spacing.xl,
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.lg,
+    marginHorizontal: 20,
+    backgroundColor: C.card,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: C.border,
     borderStyle: 'dashed',
-    padding: theme.spacing.xxl,
+    padding: 28,
     alignItems: 'center',
-    gap: theme.spacing.sm,
+    gap: 8,
   },
   emptyIcon: {
     fontSize: 32,
   },
   emptyTitle: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.md,
-    color: theme.colors.textPrimary,
-    fontWeight: '600',
+    fontSize: 15,
+    fontWeight: '700',
+    color: C.textPrimary,
   },
   emptySubtext: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.textSecondary,
+    fontSize: 13,
+    color: C.textSecondary,
     textAlign: 'center',
   },
-  emptyAction: {
-    marginTop: theme.spacing.sm,
-  },
-  emptyActionText: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.accent,
-    fontWeight: '600',
-  },
-  urgentLabel: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.sm,
-  },
-  urgentDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: theme.colors.loss,
-  },
-  compactCard: {
-    marginHorizontal: theme.spacing.xl,
-    marginBottom: theme.spacing.sm,
-  },
-  activityItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    paddingHorizontal: theme.spacing.xl,
-    paddingVertical: theme.spacing.md,
-    gap: theme.spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
-  },
-  activityAvatarWrap: {
-    position: 'relative',
-  },
-  activityAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: theme.colors.card,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  activityAvatarText: {
-    fontFamily: 'Inter',
-    fontSize: 12,
-    color: theme.colors.textPrimary,
-    fontWeight: '600',
-  },
-  activityPillarDot: {
-    position: 'absolute',
-    bottom: -2,
-    right: -2,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: theme.colors.background,
-  },
-  activityContent: {
-    flex: 1,
-  },
-  activityText: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.sm,
-    color: theme.colors.textSecondary,
-    lineHeight: 20,
-  },
-  activityName: {
-    color: theme.colors.textPrimary,
-    fontWeight: '600',
-  },
-  activityChallenge: {
-    color: theme.colors.accent,
-  },
-  activityTime: {
-    fontFamily: 'Inter',
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.textMuted,
+  emptyActionBtn: {
     marginTop: 4,
   },
+  emptyActionText: {
+    fontSize: 13,
+    color: C.primary,
+    fontWeight: '600',
+  },
+  // Active Card
+  activeCard: {
+    width: 230,
+    backgroundColor: C.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 16,
+    gap: 8,
+  },
+  activeCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  activeCardEmoji: {
+    fontSize: 28,
+  },
+  activeCardBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: `${C.success}15`,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 9999,
+    borderWidth: 1,
+    borderColor: `${C.success}30`,
+  },
+  activeDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: C.success,
+  },
+  activeCardBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: C.success,
+    letterSpacing: 0.5,
+  },
+  activeCardName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: C.textPrimary,
+    lineHeight: 20,
+  },
+  activeCardMeta: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  metaChip: {
+    fontSize: 11,
+    color: C.textSecondary,
+    fontWeight: '500',
+  },
+  progressTrack: {
+    height: 4,
+    backgroundColor: `${C.primary}25`,
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: C.primary,
+    borderRadius: 2,
+  },
+  progressLabel: {
+    fontSize: 10,
+    color: C.textSecondary,
+  },
+  // Trending Card
+  trendingList: {
+    paddingHorizontal: 20,
+    gap: 8,
+  },
+  trendingCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: C.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 14,
+    gap: 12,
+  },
+  trendingRank: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: C.textSecondary,
+    width: 24,
+    textAlign: 'center',
+  },
+  trendingEmoji: {
+    fontSize: 24,
+  },
+  trendingInfo: {
+    flex: 1,
+  },
+  trendingName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: C.textPrimary,
+  },
+  trendingMeta: {
+    fontSize: 12,
+    color: C.textSecondary,
+    marginTop: 2,
+  },
+  trendingArrow: {
+    fontSize: 20,
+    color: C.textSecondary,
+  },
+  // FAB
   fab: {
     position: 'absolute',
     bottom: 96,
@@ -455,10 +559,14 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: theme.colors.accent,
+    backgroundColor: C.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    ...theme.shadows.accent,
+    shadowColor: C.primary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 12,
+    elevation: 8,
   },
   fabText: {
     fontSize: 28,
