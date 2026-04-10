@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "Protocol",
+    "slug": "protocol-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0A0A0F",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "backgroundColor": "#0A0A0F"
+    },
+    "ios": {
+      "bundleIdentifier": "com.rrolli93.protocol",
+      "deploymentTarget": "16.0",
+      "infoPlist": {
+        "NSHealthShareUsageDescription": "Protocol reads your health data to track challenge progress.",
+        "NSHealthUpdateUsageDescription": "Protocol writes workout data to Apple Health."
+      },
+      "entitlements": {
+        "com.apple.developer.healthkit": true,
+        "com.apple.developer.healthkit.access": []
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#6C63FF"
+        }
+      ],
+      [
+        "react-native-health",
+        {
+          "isClinicalDataEnabled": false
+        }
+      ]
+    ],
+    "scheme": "protocol",
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
