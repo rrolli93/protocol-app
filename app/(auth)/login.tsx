@@ -182,6 +182,18 @@ export default function LoginScreen() {
             </Text>
           </Text>
         </View>
+
+        {/* Signup link */}
+        <TouchableOpacity
+          style={styles.signupLinkRow}
+          onPress={() => router.push('/(auth)/signup')}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.signupLinkText}>
+            New here?{' '}
+            <Text style={styles.signupLinkAccent}>Create an account</Text>
+          </Text>
+        </TouchableOpacity>
       </View>
     </SafeAreaView>
   );
@@ -363,5 +375,19 @@ const styles = StyleSheet.create({
   termsLink: {
     color: theme.colors.accent,
     textDecorationLine: 'underline',
+  },
+  signupLinkRow: {
+    alignItems: 'center',
+    paddingTop: theme.spacing.md,
+  },
+  signupLinkText: {
+    fontFamily: 'Inter',
+    fontSize: 14,
+    color: theme.colors.textSecondary,
+    textAlign: 'center',
+  },
+  signupLinkAccent: {
+    color: theme.colors.accent,
+    fontWeight: '600',
   },
 });
